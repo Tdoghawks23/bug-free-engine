@@ -19,8 +19,8 @@ import lxml.html
 import mammoth
 import mammoth.images
 from docx.opc.exceptions import PackageNotFoundError
-from py3langid.langid import MODEL_FILE, LanguageIdentifier
 
+from .common import determine_language
 from ..ir import (
     Document,
     Flag,
@@ -54,18 +54,6 @@ _FILENAME_ALT_RE = re.compile(
     r"^(img|image|pic|picture|photo|graphic|figure)[\s_-]*\d*\.\w+$", re.IGNORECASE
 )
 _FILENAME_NO_EXT_RE = re.compile(r"^(img|image|pic|dsc)[_\s-]?\d+$", re.IGNORECASE)
-
-# Content-based language detection (R15) for docs with no dc:language
-# metadata. py3langid (a maintained fork of langid.py) is used over
-# langdetect because it's deterministic by construction -- langid.py's
-# naive-Bayes classifier has no PRNG in its decision path, so there's no
-# DetectorFactory.seed footgun to remember to pin. norm_probs=True turns
-# its raw log-likelihood score into an actual 0-1 confidence so the flag
-# message and the "too short/ambiguous, fall back to en" threshold below
-# both have a meaningful number to compare against.
-_LANG_IDENTIFIER = LanguageIdentifier.from_pickled_model(MODEL_FILE, norm_probs=True)
-_LANG_DETECT_MIN_CHARS = 40
-_LANG_DETECT_CONFIDENCE_THRESHOLD = 0.7
 
 
 def extract_docx(path: str | Path) -> Document:
@@ -131,42 +119,11 @@ def extract_docx(path: str | Path) -> Document:
 
 
 def _determine_language(core, blocks: list) -> tuple[str, Flag | None]:
-    """R15: metadata wins if present. Otherwise run deterministic
-    content-based detection on the extracted text and flag the result for
-    human review (LANG_DETECTED). If there isn't enough text to detect
-    confidently, fall back to 'en' with a loud LANG_ASSUMED flag rather
-    than silently guessing or hard-rejecting the document (single-user
-    tool -- a rejection is worse UX than a flagged default)."""
-    meta_lang = (core.language or "").strip()
-    if meta_lang:
-        return meta_lang.split(",")[0].strip(), None
-
-    text = _extract_plain_text(blocks).strip()
-    if len(text) >= _LANG_DETECT_MIN_CHARS:
-        code, confidence = _LANG_IDENTIFIER.classify(text)
-        if confidence >= _LANG_DETECT_CONFIDENCE_THRESHOLD:
-            return code, Flag(
-                code="LANG_DETECTED",
-                wcag_sc="3.1.1",
-                message=(
-                    "No document language metadata found in the source "
-                    ".docx; detected the document language as "
-                    f"'{code}' from its text content (confidence "
-                    f"{float(confidence):.2f}). Confirm this is correct."
-                ),
-            )
-
-    return "en", Flag(
-        code="LANG_ASSUMED",
-        wcag_sc="3.1.1",
-        message=(
-            "No document language metadata found in the source .docx, and "
-            "there wasn't enough text (or the detector wasn't confident "
-            "enough) to reliably detect a language; defaulted the page "
-            "language to 'en'. Confirm this is correct or set the actual "
-            "language -- this is a guess, not a detection."
-        ),
-    )
+    """R15 (see extractors/common.py for the shared policy): metadata
+    wins if present, else deterministic content-based detection on the
+    extracted text."""
+    text = _extract_plain_text(blocks)
+    return determine_language(core.language, text, "the source .docx")
 
 
 def _extract_plain_text(blocks: list) -> str:

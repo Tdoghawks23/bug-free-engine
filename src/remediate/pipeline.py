@@ -15,12 +15,13 @@ from typing import Callable
 from weasyprint import HTML
 
 from .extractors.docx import DocxExtractionError, extract_docx
+from .extractors.pdf import PdfExtractionError, extract_pdf
 from .html_gen import generate_html
 from .report import build_report, render_report_html
 
 ProgressCallback = Callable[[str, float], None]
 
-_SUPPORTED_EXTENSIONS = {".docx"}
+_SUPPORTED_EXTENSIONS = {".docx", ".pdf"}
 
 
 class UnsupportedFileError(Exception):
@@ -61,7 +62,16 @@ def remediate_file(
         )
 
     report_progress("extracting", 0.0)
-    document = extract_docx(input_path)
+    if suffix == ".docx":
+        document = extract_docx(input_path)
+    else:
+        # PDF extraction is page-by-page (task 9) and reports its own
+        # sub-progress -- rescale it into the "extracting" stage's share
+        # of overall progress instead of a single 0.0 -> 1.0 jump.
+        def extraction_progress(_stage: str, page_frac: float) -> None:
+            report_progress("extracting", page_frac * 0.35)
+
+        document = extract_pdf(input_path, progress_callback=extraction_progress)
 
     # Only create the output directory once we know the input is valid --
     # a rejected/unsupported input shouldn't leave an empty outdir behind.
@@ -103,4 +113,5 @@ __all__ = [
     "ProgressCallback",
     "UnsupportedFileError",
     "DocxExtractionError",
+    "PdfExtractionError",
 ]

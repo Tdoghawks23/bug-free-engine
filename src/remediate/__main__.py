@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from .extractors.docx import DocxExtractionError
+from .extractors.pdf import PdfExtractionError
 from .pipeline import UnsupportedFileError, remediate_file
 
 
@@ -18,11 +19,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="remediate",
         description=(
-            "Remediate a DOCX document into a WCAG 2.1 AA tagged PDF/UA-1, "
-            "an accessible HTML byproduct, and a compliance report."
+            "Remediate a DOCX or PDF document into a WCAG 2.1 AA tagged "
+            "PDF/UA-1, an accessible HTML byproduct, and a compliance "
+            "report."
         ),
     )
-    parser.add_argument("input", help="Path to the input .docx file")
+    parser.add_argument("input", help="Path to the input .docx or .pdf file")
     parser.add_argument(
         "-o", "--outdir", required=True, help="Output directory (created if missing)"
     )
@@ -35,7 +37,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         result = remediate_file(input_path, args.outdir, progress_callback=_print_progress)
-    except (DocxExtractionError, UnsupportedFileError) as exc:
+    except (DocxExtractionError, PdfExtractionError, UnsupportedFileError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 

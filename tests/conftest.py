@@ -11,6 +11,7 @@ from docx_fixtures import (
     build_minimal_docx,
     build_near_empty_docx,
 )
+from pdf_fixtures import build_fixture_pdf
 
 
 @pytest.fixture
@@ -60,3 +61,15 @@ def french_text_docx(tmp_path):
 def near_empty_docx(tmp_path):
     """A .docx with almost no text -- too little for language detection."""
     return build_near_empty_docx(tmp_path / "near_empty.docx")
+
+
+@pytest.fixture
+def fixture_pdf(tmp_path):
+    """A .pdf exercising every extraction case: headings, a paragraph
+    with a link, a table, and a real content-sized image."""
+    return build_fixture_pdf(tmp_path / "fixture.pdf")
+
+
+@pytest.fixture
+def fixture_pdf_with_lang(tmp_path):
+    return build_fixture_pdf(tmp_path / "fixture_lang.pdf", set_lang="fr")

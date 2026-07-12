@@ -35,6 +35,15 @@ _CODE_INFO: dict[str, tuple[str, str]] = {
     "MULTIPLE_H1_DEMOTED": ("R2", "auto-fixed"),
     "TITLE_PROMOTED_TO_H1": ("R2", "auto-fixed"),
     "HEADER_ROW_AUTO_ADDED": ("R18", "auto-fixed"),
+    # PDF extractor (task 8) -- font-size/layout heuristics with no
+    # source semantic tags to fall back on, so most of these are
+    # needs-human-review by nature.
+    "HEADINGS_INFERRED": ("R19", "info"),
+    "HEADING_LOW_CONFIDENCE": ("R19", "needs-human-review"),
+    "READING_ORDER_UNCERTAIN": ("R20", "needs-human-review"),
+    "DECORATIVE_ASSUMED": ("R1b", "needs-human-review"),
+    "LINK_UNASSOCIATED": ("R13b", "needs-human-review"),
+    "TITLE_CLEANED": ("R12", "needs-human-review"),
 }
 _DEFAULT_R_NUMBER = "R2"
 

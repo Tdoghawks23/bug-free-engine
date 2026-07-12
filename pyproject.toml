@@ -28,3 +28,8 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: exercises a large/expensive fixture (e.g. the 500+ page PDF memory test); skip with `-m 'not slow'` for a quick local run.",
+]
