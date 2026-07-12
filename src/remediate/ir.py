@@ -218,25 +218,46 @@ class Document:
     blocks: list[Block] = field(default_factory=list)
     source_format: str = "unknown"
     warnings: list[str] = field(default_factory=list)
+    flags: list[Flag] = field(default_factory=list)
+    """Document-level flags not tied to any single block (e.g. assumed
+    language, filename-fallback title) -- see extractors/docx.py. Kept
+    separate from `warnings` (free text) because the compliance report
+    (task 6) needs the structured `code`/`wcag_sc` fields."""
 
     def all_flags(self) -> list[Flag]:
-        """Collect every flag in the document, block flags first in
-        document order, for the compliance report generator (task 6)."""
-        flags: list[Flag] = []
+        """Collect every flag in the document -- document-level flags
+        first, then block flags in document order -- for the compliance
+        report generator (task 6)."""
+        flags: list[Flag] = list(self.flags)
         for block in self.blocks:
             flags.extend(_block_flags(block))
         return flags
 
 
+def _run_flags(runs: list[TextRun]) -> list[Flag]:
+    """Flags attached to hyperlinks embedded in a run of text (e.g.
+    generic link text) -- these live on `TextRun.link.flags`, not on the
+    enclosing block, so `_block_flags` has to reach into them."""
+    flags: list[Flag] = []
+    for run in runs:
+        if run.link is not None:
+            flags.extend(run.link.flags)
+    return flags
+
+
 def _block_flags(block: Block) -> list[Flag]:
     flags = list(block.flags)
-    if isinstance(block, ListBlock):
+    if isinstance(block, (Heading, Paragraph)):
+        flags.extend(_run_flags(block.runs))
+    elif isinstance(block, ListBlock):
         for item in block.items:
             flags.extend(item.flags)
+            flags.extend(_run_flags(item.runs))
             for sub in item.sub_lists:
                 flags.extend(_block_flags(sub))
     elif isinstance(block, Table):
         for row in block.rows:
             for cell in row.cells:
                 flags.extend(cell.flags)
+                flags.extend(_run_flags(cell.runs))
     return flags
