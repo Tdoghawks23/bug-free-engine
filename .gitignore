@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Test / tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# App outputs (jobs, uploads, generated artifacts)
+outputs/
+uploads/
+jobs/
+*.sqlite3
+*.sqlite3-journal
+
+# Spike scratch output (keep FINDINGS.md, drop generated binaries)
+spike/*.pdf
+
+# OS / editor
+.DS_Store
+*.swp
+
+# veraPDF download (if fetched locally instead of system-installed)
+verapdf/
