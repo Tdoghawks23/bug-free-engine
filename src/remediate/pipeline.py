@@ -48,7 +48,6 @@ def remediate_file(
     """
     input_path = Path(input_path)
     outdir = Path(outdir)
-    outdir.mkdir(parents=True, exist_ok=True)
 
     def report_progress(stage: str, pct: float) -> None:
         if progress_callback is not None:
@@ -63,6 +62,10 @@ def remediate_file(
 
     report_progress("extracting", 0.0)
     document = extract_docx(input_path)
+
+    # Only create the output directory once we know the input is valid --
+    # a rejected/unsupported input shouldn't leave an empty outdir behind.
+    outdir.mkdir(parents=True, exist_ok=True)
 
     report_progress("generating_html", 0.35)
     html_result = generate_html(document)

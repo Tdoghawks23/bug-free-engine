@@ -119,7 +119,7 @@ def test_report_flags_match_fixture_known_judgment_calls(fixture_docx, tmp_path)
     data = json.loads(result.report_json_path.read_text())
     codes = {item["code"] for item in data["items"]}
 
-    assert "LANG_ASSUMED" in codes
+    assert "LANG_DETECTED" in codes  # no lang metadata, but real prose present
     assert "MISSING_ALT" in codes
     assert "GENERIC_LINK_TEXT" in codes
     assert "HEADING_SKIP_REPAIRED" in codes

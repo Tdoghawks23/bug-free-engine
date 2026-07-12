@@ -20,11 +20,17 @@ from .ir import Document, Flag
 # R-number here is the docs/WCAG-CHECKLIST.md cross-reference id.
 _CODE_INFO: dict[str, tuple[str, str]] = {
     "LANG_ASSUMED": ("R15", "needs-human-review"),
+    "LANG_DETECTED": ("R15", "needs-human-review"),
     "TITLE_FROM_FILENAME": ("R12", "needs-human-review"),
     "MISSING_ALT": ("R1b", "needs-human-review"),
-    "NO_HEADER_ROW_DETECTED": ("R18", "info"),
+    "IMAGE_UNKNOWN_MIME_TYPE": ("R1", "needs-human-review"),
+    # Both of these instruct a human to verify something the pipeline
+    # couldn't determine with confidence -- "info" undersold that they're
+    # actionable, not just FYI.
+    "NO_HEADER_ROW_DETECTED": ("R18", "needs-human-review"),
+    "UNMAPPED_BLOCK": ("R2", "needs-human-review"),
+    "COMPLEX_TABLE_STRUCTURE": ("R18", "needs-human-review"),
     "GENERIC_LINK_TEXT": ("R13", "needs-human-review"),
-    "UNMAPPED_BLOCK": ("R2", "info"),
     "HEADING_SKIP_REPAIRED": ("R14", "auto-fixed"),
     "MULTIPLE_H1_DEMOTED": ("R2", "auto-fixed"),
     "TITLE_PROMOTED_TO_H1": ("R2", "auto-fixed"),

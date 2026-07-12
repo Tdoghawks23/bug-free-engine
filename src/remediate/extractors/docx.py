@@ -19,6 +19,7 @@ import lxml.html
 import mammoth
 import mammoth.images
 from docx.opc.exceptions import PackageNotFoundError
+from py3langid.langid import MODEL_FILE, LanguageIdentifier
 
 from ..ir import (
     Document,
@@ -54,6 +55,18 @@ _FILENAME_ALT_RE = re.compile(
 )
 _FILENAME_NO_EXT_RE = re.compile(r"^(img|image|pic|dsc)[_\s-]?\d+$", re.IGNORECASE)
 
+# Content-based language detection (R15) for docs with no dc:language
+# metadata. py3langid (a maintained fork of langid.py) is used over
+# langdetect because it's deterministic by construction -- langid.py's
+# naive-Bayes classifier has no PRNG in its decision path, so there's no
+# DetectorFactory.seed footgun to remember to pin. norm_probs=True turns
+# its raw log-likelihood score into an actual 0-1 confidence so the flag
+# message and the "too short/ambiguous, fall back to en" threshold below
+# both have a meaningful number to compare against.
+_LANG_IDENTIFIER = LanguageIdentifier.from_pickled_model(MODEL_FILE, norm_probs=True)
+_LANG_DETECT_MIN_CHARS = 40
+_LANG_DETECT_CONFIDENCE_THRESHOLD = 0.7
+
 
 def extract_docx(path: str | Path) -> Document:
     """Extract a .docx file into the internal Document representation.
@@ -76,24 +89,6 @@ def extract_docx(path: str | Path) -> Document:
     core = docx_doc.core_properties
     doc_flags: list[Flag] = []
 
-    lang = (core.language or "").strip()
-    if not lang:
-        lang = "en"
-        doc_flags.append(
-            Flag(
-                code="LANG_ASSUMED",
-                wcag_sc="3.1.1",
-                message=(
-                    "No document language metadata found in the source .docx "
-                    "(docProps core.xml dc:language is empty); defaulted the "
-                    "page language to 'en'. Confirm this is correct or set the "
-                    "actual language."
-                ),
-            )
-        )
-    else:
-        lang = lang.split(",")[0].strip()
-
     registry: list[tuple[bytes, str]] = []
     convert_image = mammoth.images.img_element(lambda image: _capture_image(image, registry))
 
@@ -102,6 +97,10 @@ def extract_docx(path: str | Path) -> Document:
 
     root = lxml.html.fragment_fromstring(result.value, create_parent="div")
     blocks = _walk_blocks(root, registry)
+
+    lang, lang_flag = _determine_language(core, blocks)
+    if lang_flag is not None:
+        doc_flags.append(lang_flag)
 
     title = (core.title or "").strip()
     if not title:
@@ -129,6 +128,73 @@ def extract_docx(path: str | Path) -> Document:
         source_format="docx",
         flags=doc_flags,
     )
+
+
+def _determine_language(core, blocks: list) -> tuple[str, Flag | None]:
+    """R15: metadata wins if present. Otherwise run deterministic
+    content-based detection on the extracted text and flag the result for
+    human review (LANG_DETECTED). If there isn't enough text to detect
+    confidently, fall back to 'en' with a loud LANG_ASSUMED flag rather
+    than silently guessing or hard-rejecting the document (single-user
+    tool -- a rejection is worse UX than a flagged default)."""
+    meta_lang = (core.language or "").strip()
+    if meta_lang:
+        return meta_lang.split(",")[0].strip(), None
+
+    text = _extract_plain_text(blocks).strip()
+    if len(text) >= _LANG_DETECT_MIN_CHARS:
+        code, confidence = _LANG_IDENTIFIER.classify(text)
+        if confidence >= _LANG_DETECT_CONFIDENCE_THRESHOLD:
+            return code, Flag(
+                code="LANG_DETECTED",
+                wcag_sc="3.1.1",
+                message=(
+                    "No document language metadata found in the source "
+                    ".docx; detected the document language as "
+                    f"'{code}' from its text content (confidence "
+                    f"{float(confidence):.2f}). Confirm this is correct."
+                ),
+            )
+
+    return "en", Flag(
+        code="LANG_ASSUMED",
+        wcag_sc="3.1.1",
+        message=(
+            "No document language metadata found in the source .docx, and "
+            "there wasn't enough text (or the detector wasn't confident "
+            "enough) to reliably detect a language; defaulted the page "
+            "language to 'en'. Confirm this is correct or set the actual "
+            "language -- this is a guess, not a detection."
+        ),
+    )
+
+
+def _extract_plain_text(blocks: list) -> str:
+    """Flatten every run of visible text in `blocks` into one string for
+    language detection. Order/structure doesn't matter here, just having
+    enough real prose for the classifier."""
+    parts: list[str] = []
+
+    def visit(block) -> None:
+        if isinstance(block, (Heading, Paragraph)):
+            if block.text.strip():
+                parts.append(block.text)
+        elif isinstance(block, ListBlock):
+            for item in block.items:
+                text = "".join(r.text for r in item.runs)
+                if text.strip():
+                    parts.append(text)
+                for sub in item.sub_lists:
+                    visit(sub)
+        elif isinstance(block, Table):
+            for row in block.rows:
+                for cell in row.cells:
+                    if cell.text.strip():
+                        parts.append(cell.text)
+
+    for block in blocks:
+        visit(block)
+    return " ".join(parts)
 
 
 def _capture_image(image, registry: list[tuple[bytes, str]]) -> dict:
@@ -170,6 +236,17 @@ def _inline_runs_of_element(el, bold: bool = False, italic: bool = False) -> lis
         href = el.get("href") or ""
         text = el.text_content()
         if not text:
+            img_descendant = el.find(".//img")
+            if img_descendant is not None:
+                # Image-only hyperlink (e.g. a linked logo) reached from a
+                # context that can only emit inline text runs (list item,
+                # table cell, nested span -- not a top-level paragraph,
+                # which _paragraph_or_images handles as a proper Image
+                # block instead). Fall back to the image's alt text as the
+                # link's visible/accessible text rather than silently
+                # dropping both the link and the image.
+                alt = img_descendant.get("alt") or "image"
+                return [_mk_run(alt, bold, italic, link=Link(text=alt, href=href))]
             return []
         return [_mk_run(text, bold, italic, link=Link(text=text, href=href))]
 
@@ -186,7 +263,9 @@ def _inline_runs_of_element(el, bold: bool = False, italic: bool = False) -> lis
     return runs
 
 
-def _build_image(img_el, registry: list[tuple[bytes, str]]) -> Image:
+def _build_image(
+    img_el, registry: list[tuple[bytes, str]], link: Link | None = None
+) -> Image:
     src = img_el.get("src", "")
     data = b""
     mime = None
@@ -202,6 +281,7 @@ def _build_image(img_el, registry: list[tuple[bytes, str]]) -> Image:
         mime_type=mime,
         decorative=None,
         needs_review=not meaningful,
+        link=link,
     )
     if not meaningful:
         image.flags.append(
@@ -218,22 +298,45 @@ def _build_image(img_el, registry: list[tuple[bytes, str]]) -> Image:
     return image
 
 
+def _as_image_only_link(el) -> tuple | None:
+    """If `el` is an `<a>` wrapping an `<img>` with no link text (the
+    shape mammoth emits for a Word image with a hyperlink applied),
+    return `(img_element, Link)`; otherwise None."""
+    if el.tag != "a":
+        return None
+    if el.text_content():
+        return None
+    img_el = el.find(".//img")
+    if img_el is None:
+        return None
+    href = el.get("href") or ""
+    return img_el, Link(text="", href=href)
+
+
 def _paragraph_or_images(p_el, registry: list[tuple[bytes, str]]) -> list:
     """A mammoth <p> is either body text, or (for an embedded image) a
-    lone <img>. Split on direct-child <img> so mixed content still comes
-    out as separate Paragraph/Image blocks in the right order."""
+    lone <img> -- or, for an image with a hyperlink applied in Word (a
+    common pattern, e.g. a linked logo/banner), a lone `<a href=...>
+    <img/></a>` with no link text. Split on both so mixed content still
+    comes out as separate Paragraph/Image blocks in the right order, and
+    an image-wrapped-in-a-link is never silently dropped."""
     blocks: list = []
     buffer: list[TextRun] = []
 
     if p_el.text:
         buffer.append(_mk_run(p_el.text))
     for child in p_el:
-        if child.tag == "img":
+        linked_img = _as_image_only_link(child)
+        if child.tag == "img" or linked_img is not None:
             cleaned = _clean_runs(buffer)
             if cleaned:
                 blocks.append(Paragraph(runs=cleaned))
             buffer = []
-            blocks.append(_build_image(child, registry))
+            if child.tag == "img":
+                blocks.append(_build_image(child, registry))
+            else:
+                img_el, link = linked_img
+                blocks.append(_build_image(img_el, registry, link=link))
         else:
             buffer.extend(_inline_runs_of_element(child))
         if child.tail:
@@ -278,13 +381,25 @@ def _build_table(table_el) -> Table:
         row_els = list(table_el.findall("tr"))
 
     rows: list[TableRow] = []
+    has_spans = False
     for tr in row_els:
         cells: list[TableCell] = []
         for cell_el in tr:
             if cell_el.tag not in ("td", "th"):
                 continue
             runs = _clean_runs(_inline_runs_of_element(cell_el))
-            cells.append(TableCell(runs=runs, header=(cell_el.tag == "th")))
+            colspan = _int_attr(cell_el, "colspan", 1)
+            rowspan = _int_attr(cell_el, "rowspan", 1)
+            if colspan > 1 or rowspan > 1:
+                has_spans = True
+            cells.append(
+                TableCell(
+                    runs=runs,
+                    header=(cell_el.tag == "th"),
+                    colspan=colspan,
+                    rowspan=rowspan,
+                )
+            )
         rows.append(TableRow(cells=cells))
 
     table = Table(rows=rows, header_row=header_row)
@@ -302,7 +417,36 @@ def _build_table(table_el) -> Table:
                 ),
             )
         )
+    if has_spans:
+        # R18: merged/spanned cells make the grid too irregular to trust
+        # auto-applied th/scope association -- flag for manual
+        # remediation rather than guess at row/col header duality. The
+        # spans themselves are still rendered honestly (colspan/rowspan
+        # passed through in html_gen) so the grid isn't mangled while it
+        # waits for review.
+        table.flags.append(
+            Flag(
+                code="COMPLEX_TABLE_STRUCTURE",
+                wcag_sc="1.3.1",
+                message=(
+                    "This table has merged cells (colspan/rowspan > 1); "
+                    "automatic header/scope association is unreliable for "
+                    "merged grids, so headers were not auto-applied here. "
+                    "Needs manual review of header/data-cell relationships."
+                ),
+            )
+        )
     return table
+
+
+def _int_attr(el, name: str, default: int) -> int:
+    value = el.get(name)
+    if value is None:
+        return default
+    try:
+        return max(1, int(value))
+    except ValueError:
+        return default
 
 
 def _walk_blocks(root, registry: list[tuple[bytes, str]]) -> list:

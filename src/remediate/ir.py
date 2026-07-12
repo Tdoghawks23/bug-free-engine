@@ -127,10 +127,18 @@ class ListBlock:
 
 @dataclass
 class TableCell:
-    """A single table cell. `header` marks it as a th (vs td)."""
+    """A single table cell. `header` marks it as a th (vs td).
+
+    `colspan`/`rowspan` mirror the source's merged-cell span (1 means no
+    merge). The extractor preserves these honestly rather than silently
+    collapsing them -- see `Table.flags` for the accompanying
+    COMPLEX_TABLE_STRUCTURE human-review flag on any table that uses
+    them (R18)."""
 
     runs: list[TextRun]
     header: bool = False
+    colspan: int = 1
+    rowspan: int = 1
     flags: list[Flag] = field(default_factory=list)
 
     @property
@@ -177,6 +185,10 @@ class Image:
         generator can inline or write it out without re-reading the source
         document.
     `mime_type`: e.g. "image/png", "image/jpeg".
+    `link`: set when the image itself is wrapped in a hyperlink in the
+        source (e.g. a linked logo/banner) -- the HTML generator wraps
+        the rendered `<img>` in an `<a href>` using this instead of
+        silently dropping the link (or the image).
     """
 
     alt: str | None = None
@@ -184,6 +196,7 @@ class Image:
     needs_review: bool = True
     data: bytes | None = None
     mime_type: str | None = None
+    link: Link | None = None
     flags: list[Flag] = field(default_factory=list)
 
 

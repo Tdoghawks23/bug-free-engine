@@ -16,9 +16,11 @@ def test_report_maps_flags_and_autofixes_to_r_numbers(fixture_docx):
 
     by_code = {item.code: item for item in report.items}
 
-    assert by_code["LANG_ASSUMED"].r_number == "R15"
-    assert by_code["LANG_ASSUMED"].wcag_sc == "3.1.1"
-    assert by_code["LANG_ASSUMED"].severity == "needs-human-review"
+    # fixture_docx has no dc:language metadata but plenty of real prose,
+    # so it's detected rather than assumed.
+    assert by_code["LANG_DETECTED"].r_number == "R15"
+    assert by_code["LANG_DETECTED"].wcag_sc == "3.1.1"
+    assert by_code["LANG_DETECTED"].severity == "needs-human-review"
 
     assert by_code["MISSING_ALT"].r_number == "R1b"
     assert by_code["MISSING_ALT"].wcag_sc == "1.1.1"
@@ -28,6 +30,28 @@ def test_report_maps_flags_and_autofixes_to_r_numbers(fixture_docx):
 
     assert by_code["HEADING_SKIP_REPAIRED"].r_number == "R14"
     assert by_code["HEADING_SKIP_REPAIRED"].severity == "auto-fixed"
+
+
+def test_report_reclassifies_verify_style_flags_as_needs_human_review(fixture_docx):
+    # NO_HEADER_ROW_DETECTED and UNMAPPED_BLOCK messages both instruct the
+    # reader to verify something -- they shouldn't be filed as merely
+    # "info".
+    from remediate.report import _CODE_INFO
+
+    assert _CODE_INFO["NO_HEADER_ROW_DETECTED"][1] == "needs-human-review"
+    assert _CODE_INFO["UNMAPPED_BLOCK"][1] == "needs-human-review"
+
+
+def test_report_maps_complex_table_structure(merged_table_docx):
+    from remediate.extractors.docx import extract_docx
+
+    doc = extract_docx(merged_table_docx)
+    html_result = generate_html(doc)
+    report = build_report(doc, html_result.autofixes)
+
+    by_code = {item.code: item for item in report.items}
+    assert by_code["COMPLEX_TABLE_STRUCTURE"].r_number == "R18"
+    assert by_code["COMPLEX_TABLE_STRUCTURE"].severity == "needs-human-review"
 
 
 def test_report_json_round_trips(fixture_docx):

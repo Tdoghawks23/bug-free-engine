@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import html5lib
 import lxml.html
 
 from remediate.extractors.docx import extract_docx
 from remediate.html_gen import MISSING_ALT_PLACEHOLDER, generate_html
-from remediate.ir import Document, Heading, Paragraph, TextRun
+from remediate.ir import Document, Heading, Image, Link, Paragraph, TextRun
 
 
 def _parse(html_str: str):
@@ -150,3 +151,92 @@ def test_links_are_underlined_not_color_only():
     from remediate.html_gen import DEFAULT_CSS
 
     assert "text-decoration: underline" in DEFAULT_CSS
+
+
+def test_image_wrapped_in_hyperlink_renders_as_linked_img(linked_image_docx):
+    doc = extract_docx(linked_image_docx)
+    result = generate_html(doc)
+    tree = _parse(result.html)
+
+    imgs = tree.xpath("//img")
+    assert len(imgs) == 1
+    # the image's containing <a> is the one carrying the link's href --
+    # it must not have been silently dropped.
+    anchor = imgs[0].getparent()
+    assert anchor.tag == "a"
+    assert anchor.get("href") == "https://example.org/home"
+
+
+def test_filename_like_alt_never_ships_verbatim(filename_alt_docx):
+    doc = extract_docx(filename_alt_docx)
+    result = generate_html(doc)
+    tree = _parse(result.html)
+
+    imgs = tree.xpath("//img")
+    assert len(imgs) == 1
+    assert imgs[0].get("alt") == MISSING_ALT_PLACEHOLDER
+    assert "Picture1.jpg" not in result.html
+
+
+def test_needs_review_alt_substitution_is_single_source_of_truth():
+    # Any image with needs_review=True gets the placeholder, regardless
+    # of what junk happens to be sitting in `alt` -- html_gen must not
+    # re-derive its own "is this filename-like" heuristic.
+    from remediate.html_gen import _render_image
+
+    image = Image(alt="whatever-junk-value.png", needs_review=True)
+    rendered = _render_image(image, [])
+    assert MISSING_ALT_PLACEHOLDER in rendered
+    assert "whatever-junk-value.png" not in rendered
+
+
+def test_merged_table_cells_flagged_and_spans_rendered_consistently(merged_table_docx):
+    doc = extract_docx(merged_table_docx)
+    codes = {f.code for f in doc.all_flags()}
+    assert "COMPLEX_TABLE_STRUCTURE" in codes
+
+    result = generate_html(doc)
+    tree = _parse(result.html)
+    table = tree.xpath("//table")[0]
+
+    header_cells = table.xpath(".//thead//tr[1]/th")
+    header_total = sum(int(th.get("colspan", "1")) for th in header_cells)
+
+    body_rows = table.xpath(".//tbody/tr")
+    first_body_total = sum(
+        int(cell.get("colspan", "1")) for cell in body_rows[0].xpath("./td|./th")
+    )
+    # The header row's column count (accounting for colspan) must match
+    # the first body row's -- otherwise the grid is misaligned.
+    assert header_total == first_body_total
+
+    assert any(th.get("colspan") == "2" for th in header_cells)
+    rowspans = [
+        cell.get("rowspan")
+        for row in body_rows
+        for cell in row.xpath("./td|./th")
+        if cell.get("rowspan")
+    ]
+    assert "2" in rowspans
+
+
+def test_image_with_data_but_unknown_mime_type_is_flagged_not_silently_blank():
+    image = Image(data=b"\x00\x01", mime_type=None, alt="A description", needs_review=False)
+    from remediate.html_gen import _render_image
+
+    rendered = _render_image(image, [])
+    assert 'src=""' in rendered
+    assert any(f.code == "IMAGE_UNKNOWN_MIME_TYPE" for f in image.flags)
+
+
+def test_generated_html_is_valid_and_has_no_duplicate_ids(fixture_docx):
+    doc = extract_docx(fixture_docx)
+    result = generate_html(doc)
+
+    # Strict parse (raises on parse errors when strict=True) -- R16.
+    parser = html5lib.HTMLParser(strict=True)
+    parser.parse(result.html)
+
+    tree = _parse(result.html)
+    ids = tree.xpath("//@id")
+    assert len(ids) == len(set(ids))

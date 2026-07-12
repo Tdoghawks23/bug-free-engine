@@ -314,21 +314,32 @@ def _render_row(row: TableRow, is_header_row: bool, header_col: bool) -> str:
     for i, cell in enumerate(row.cells):
         is_header = cell.header or is_header_row or (header_col and i == 0)
         tag = "th" if is_header else "td"
-        scope = ""
+        attrs = ""
         if is_header:
             if is_header_row:
-                scope = ' scope="col"'
+                attrs += ' scope="col"'
             elif header_col and i == 0:
-                scope = ' scope="row"'
-        cells_html.append(f"<{tag}{scope}>{_render_runs(cell.runs)}</{tag}>")
+                attrs += ' scope="row"'
+        # Preserve merged-cell spans honestly rather than collapsing them
+        # -- see COMPLEX_TABLE_STRUCTURE (R18): the flag covers the human
+        # follow-up, but the rendered grid still needs to stay aligned.
+        if cell.colspan and cell.colspan > 1:
+            attrs += f' colspan="{cell.colspan}"'
+        if cell.rowspan and cell.rowspan > 1:
+            attrs += f' rowspan="{cell.rowspan}"'
+        cells_html.append(f"<{tag}{attrs}>{_render_runs(cell.runs)}</{tag}>")
     return f"<tr>{''.join(cells_html)}</tr>"
 
 
 def _render_image(image: Image, autofixes: list[AutoFix]) -> str:
-    alt = image.alt
+    # `needs_review` is the single source of truth for "this alt text
+    # isn't trustworthy" -- it's already set by the extractor for the
+    # missing/empty AND filename-like-alt cases (see docx.py
+    # _looks_filename_like), so don't re-derive a narrower "just missing"
+    # check here and ship a filename verbatim as if it were real alt text.
     if image.decorative:
         alt = ""
-    elif not alt:
+    elif image.needs_review:
         alt = MISSING_ALT_PLACEHOLDER
         if not any(f.code == "MISSING_ALT" for f in image.flags):
             image.flags.append(
@@ -342,12 +353,34 @@ def _render_image(image: Image, autofixes: list[AutoFix]) -> str:
                     ),
                 )
             )
+    else:
+        alt = image.alt or ""
 
     src = ""
     if image.data and image.mime_type:
         b64 = base64.b64encode(image.data).decode("ascii")
         src = f"data:{image.mime_type};base64,{b64}"
-    return f'<img src="{src}" alt="{_esc(alt)}">'
+    elif image.data and not image.mime_type:
+        # No usable src can be built without a mime type -- flag it
+        # rather than silently shipping an empty-src <img>.
+        if not any(f.code == "IMAGE_UNKNOWN_MIME_TYPE" for f in image.flags):
+            image.flags.append(
+                Flag(
+                    code="IMAGE_UNKNOWN_MIME_TYPE",
+                    wcag_sc="1.1.1",
+                    message=(
+                        "Image data was extracted but its mime type could "
+                        "not be determined, so it could not be rendered "
+                        "(empty src). Needs manual investigation of the "
+                        "source image format."
+                    ),
+                )
+            )
+
+    img_html = f'<img src="{src}" alt="{_esc(alt)}">'
+    if image.link is not None and image.link.href:
+        return f'<a href="{_esc(image.link.href)}">{img_html}</a>'
+    return img_html
 
 
 def _render_runs(runs: list[TextRun]) -> str:
