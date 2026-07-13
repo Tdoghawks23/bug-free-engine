@@ -42,8 +42,9 @@ _CODE_INFO: dict[str, tuple[str, str]] = {
     "HEADING_LOW_CONFIDENCE": ("R19", "needs-human-review"),
     "READING_ORDER_UNCERTAIN": ("R20", "needs-human-review"),
     "DECORATIVE_ASSUMED": ("R1b", "needs-human-review"),
-    "LINK_UNASSOCIATED": ("R13b", "needs-human-review"),
+    "LINK_UNASSOCIATED": ("R21", "needs-human-review"),
     "TITLE_CLEANED": ("R12", "needs-human-review"),
+    "TABLE_EXTRACTION_UNCERTAIN": ("R18", "needs-human-review"),
 }
 _DEFAULT_R_NUMBER = "R2"
 

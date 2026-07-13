@@ -97,6 +97,108 @@ def build_multi_column_pdf(path: str | Path) -> Path:
     return path
 
 
+def build_pull_quote_pdf(path: str | Path) -> Path:
+    """A single-column page of body text with a centered, larger-font
+    pull-quote (two indented lines) in the middle of the flow -- the
+    QA blocker-1 regression fixture: a naive 2-cluster x-split would
+    treat the differently-indented quote as "column 2" and move it to
+    the end of the document instead of leaving it in its actual visual
+    (y-order) position."""
+    path = Path(path)
+    doc = fitz.open()
+    page = doc.new_page()
+    y = 100
+    for i in range(1, 5):
+        page.insert_text(
+            (72, y), f"Body paragraph number {i} of ordinary prose content here.", fontsize=_BODY_SIZE, fontname="helv"
+        )
+        y += 80
+    quote_y = y
+    # A large vertical gap between the two quote lines keeps them as two
+    # separate PyMuPDF text blocks (rather than merging into one),
+    # matching the real-world case that triggered the original bug: a
+    # 2-cluster x-split where *both* clusters have >=2 blocks.
+    page.insert_text((250, quote_y), "This is a centered pull-quote", fontsize=18, fontname="helv")
+    page.insert_text((250, quote_y + 40), "spanning two indented lines.", fontsize=18, fontname="helv")
+    y = quote_y + 80
+    for i in range(5, 9):
+        page.insert_text(
+            (72, y), f"Body paragraph number {i} of ordinary prose content here.", fontsize=_BODY_SIZE, fontname="helv"
+        )
+        y += 80
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
+def build_low_confidence_heading_pdf(path: str | Path) -> Path:
+    """A single-column page with ordinary body paragraphs and one short,
+    only-slightly-larger-font odd line in the middle -- should score low
+    per-heading confidence (R19) and get its own needs-human-review
+    flag rather than being silently rolled into the blanket
+    HEADINGS_INFERRED summary."""
+    path = Path(path)
+    doc = fitz.open()
+    page = doc.new_page()
+    y = 100
+    page.insert_text((72, y), "Body paragraph number one of ordinary prose content here.", fontsize=_BODY_SIZE, fontname="helv")
+    y += 40
+    page.insert_text((72, y), "Body paragraph number two of ordinary prose content here.", fontsize=_BODY_SIZE, fontname="helv")
+    y += 40
+    page.insert_text((72, y), "Odd note.", fontsize=_BODY_SIZE + 1, fontname="helv")
+    y += 40
+    page.insert_text((72, y), "Body paragraph number three of ordinary prose content here.", fontsize=_BODY_SIZE, fontname="helv")
+    y += 40
+    page.insert_text((72, y), "Body paragraph number four of ordinary prose content here.", fontsize=_BODY_SIZE, fontname="helv")
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
+def build_table_with_tight_caption_pdf(path: str | Path) -> Path:
+    """A raw-drawn bordered table whose bbox, as detected by
+    `find_tables()`, comes within a couple points of a caption line
+    directly below it -- the QA blocker-2 regression fixture. Without
+    the cross-check against raw text blocks, the caption gets word-torn
+    across the last row's cells (find_tables() absorbs it) *and*
+    disappears from the normal text flow (its own bbox overlaps the
+    table bbox by >=60% of its own area)."""
+    path = Path(path)
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "Quarterly Counts", fontsize=_H2_SIZE, fontname="helv")
+
+    x0, y0, x1, y1 = 72, 120, 260, 200
+    col_mid = (x0 + x1) / 2
+    row_h = (y1 - y0) / 3
+    shape = page.new_shape()
+    shape.draw_rect(fitz.Rect(x0, y0, x1, y1))
+    for i in range(1, 3):
+        shape.draw_line((x0, y0 + i * row_h), (x1, y0 + i * row_h))
+    shape.draw_line((col_mid, y0), (col_mid, y1))
+    shape.finish(width=1)
+    shape.commit()
+
+    cells = [
+        ("Region", x0 + 4, y0 + 14),
+        ("Count", col_mid + 4, y0 + 14),
+        ("North", x0 + 4, y0 + row_h + 14),
+        ("12", col_mid + 4, y0 + row_h + 14),
+        ("South", x0 + 4, y0 + 2 * row_h + 14),
+        ("9", col_mid + 4, y0 + 2 * row_h + 14),
+    ]
+    for text, cx, cy in cells:
+        page.insert_text((cx, cy), text, fontsize=_BODY_SIZE - 1, fontname="helv")
+
+    # Placed just 1pt below the table's bottom border -- close enough
+    # that its own bbox mostly overlaps the table's bbox.
+    page.insert_text((x0, y1 + 1), "Regional counts summary caption text.", fontsize=_BODY_SIZE - 2, fontname="helv")
+
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
 def build_hyphenation_pdf(path: str | Path) -> Path:
     """A paragraph whose PDF line-wrap splits a word with a trailing
     hyphen, for the hyphenated-line-break join test."""

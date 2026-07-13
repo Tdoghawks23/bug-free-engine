@@ -9,10 +9,13 @@ from pdf_fixtures import (
     build_image_pdf,
     build_link_pdf,
     build_list_pdf,
+    build_low_confidence_heading_pdf,
     build_multi_column_pdf,
+    build_pull_quote_pdf,
     build_repeated_logo_pdf,
     build_scanned_pdf,
     build_table_pdf,
+    build_table_with_tight_caption_pdf,
     build_two_column_pdf,
 )
 from remediate.extractors.pdf import PdfExtractionError, extract_pdf
@@ -35,6 +38,20 @@ def test_heading_sizes_inferred_from_font_clustering(tmp_path):
     assert "HEADINGS_INFERRED" in codes
 
 
+def test_low_confidence_heading_gets_individual_flag(tmp_path):
+    # R19: a short, only-slightly-larger-font odd line among ordinary
+    # body paragraphs -- pull-quote-style -- should score low
+    # per-heading confidence and get its own needs-human-review flag
+    # naming it, distinct from the blanket HEADINGS_INFERRED summary.
+    doc = extract_pdf(build_low_confidence_heading_pdf(tmp_path / "lowconf.pdf"))
+    headings = [b for b in doc.blocks if isinstance(b, Heading)]
+    odd = next(h for h in headings if h.text == "Odd note.")
+    codes = {f.code for f in odd.flags}
+    assert "HEADING_LOW_CONFIDENCE" in codes
+    flag = next(f for f in odd.flags if f.code == "HEADING_LOW_CONFIDENCE")
+    assert "Odd note." in flag.message
+
+
 def test_two_column_reading_order(tmp_path):
     doc = extract_pdf(build_two_column_pdf(tmp_path / "2col.pdf"))
     paragraphs = [b for b in doc.blocks if isinstance(b, Paragraph)]
@@ -42,6 +59,53 @@ def test_two_column_reading_order(tmp_path):
 
     # Left column top-to-bottom, then right column top-to-bottom -- not
     # interleaved by raw y-position (which would alternate left/right).
+    assert texts == [
+        "Left column line one of prose.",
+        "Left column line two of prose.",
+        "Left column line three of prose.",
+        "Right column line one of prose.",
+        "Right column line two of prose.",
+        "Right column line three of prose.",
+    ]
+    codes = {f.code for f in doc.all_flags()}
+    assert "READING_ORDER_UNCERTAIN" not in codes
+
+
+def test_pull_quote_stays_in_visual_order_not_moved_to_document_end(tmp_path):
+    # QA blocker-1 regression: a centered, larger-font pull-quote
+    # indented away from the body creates a bimodal 2-cluster x-split,
+    # but it isn't a genuine page-wide two-column layout -- it must stay
+    # in its actual y-order position in the middle of the flow, not get
+    # treated as "column 2" and moved after every body paragraph.
+    doc = extract_pdf(build_pull_quote_pdf(tmp_path / "pullquote.pdf"))
+    texts = [b.text for b in doc.blocks if isinstance(b, (Paragraph, Heading))]
+
+    assert texts == [
+        "Body paragraph number 1 of ordinary prose content here.",
+        "Body paragraph number 2 of ordinary prose content here.",
+        "Body paragraph number 3 of ordinary prose content here.",
+        "Body paragraph number 4 of ordinary prose content here.",
+        "This is a centered pull-quote",
+        "spanning two indented lines.",
+        "Body paragraph number 5 of ordinary prose content here.",
+        "Body paragraph number 6 of ordinary prose content here.",
+        "Body paragraph number 7 of ordinary prose content here.",
+        "Body paragraph number 8 of ordinary prose content here.",
+    ]
+
+    # The x-distribution really was bimodal/ambiguous -- flagged for
+    # human review rather than silently reordered.
+    codes = {f.code for f in doc.all_flags()}
+    assert "READING_ORDER_UNCERTAIN" in codes
+
+
+def test_genuine_two_column_layout_still_detected_after_pull_quote_fix(tmp_path):
+    # (b) from the blocker-1 fix: a real two-column page (both clusters
+    # spanning the full vertical extent, each with a real item share)
+    # must still be detected and ordered as two columns.
+    doc = extract_pdf(build_two_column_pdf(tmp_path / "2col.pdf"))
+    paragraphs = [b for b in doc.blocks if isinstance(b, Paragraph)]
+    texts = [p.text for p in paragraphs]
     assert texts == [
         "Left column line one of prose.",
         "Left column line two of prose.",
@@ -110,6 +174,40 @@ def test_table_extracted_via_find_tables(tmp_path):
     # Table text isn't duplicated into a separate paragraph.
     paragraphs = [b for b in doc.blocks if isinstance(b, Paragraph)]
     assert not any("Region" in p.text for p in paragraphs)
+
+
+def test_table_with_tight_caption_preserves_caption_and_flags_uncertain(tmp_path):
+    # QA blocker-2 regression: a caption sitting a couple points below
+    # the table border must not silently disappear from the output --
+    # either the cells stay clean and the caption survives as a
+    # paragraph, or (as here, since find_tables()'s own extraction
+    # already absorbed/mangled some of it) the caption still survives
+    # as a paragraph *and* the table is flagged for human review rather
+    # than shipping corrupted cells silently.
+    doc = extract_pdf(build_table_with_tight_caption_pdf(tmp_path / "captioned_table.pdf"))
+
+    tables = [b for b in doc.blocks if isinstance(b, Table)]
+    assert len(tables) == 1
+    table = tables[0]
+
+    paragraphs = [b for b in doc.blocks if isinstance(b, Paragraph)]
+    assert any("Regional counts summary caption text." in p.text for p in paragraphs), (
+        "caption text must not disappear from the document -- it should "
+        "remain in the normal text flow, not be silently swallowed by "
+        "the table's bbox-overlap exclusion"
+    )
+
+    codes = {f.code for f in table.flags}
+    assert "TABLE_EXTRACTION_UNCERTAIN" in codes
+
+
+def test_clean_table_not_flagged_extraction_uncertain(tmp_path):
+    # No caption nearby -- the reconciliation check must not produce
+    # false positives on an ordinary clean table.
+    doc = extract_pdf(build_table_pdf(tmp_path / "table.pdf"))
+    tables = [b for b in doc.blocks if isinstance(b, Table)]
+    codes = {f.code for f in tables[0].flags}
+    assert "TABLE_EXTRACTION_UNCERTAIN" not in codes
 
 
 def test_image_decorative_heuristics(tmp_path):

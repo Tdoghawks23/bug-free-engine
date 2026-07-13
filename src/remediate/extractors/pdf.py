@@ -25,6 +25,13 @@ from typing import Callable
 
 import fitz  # PyMuPDF
 
+# PyMuPDF prints a one-time stdout hint recommending its optional
+# pymupdf_layout package the first time find_tables()/layout analysis
+# runs. Noise in a CLI pipeline's stdout, not an error -- use the
+# library's own documented opt-out rather than filtering stdout after
+# the fact.
+fitz.no_recommend_layout()
+
 from .common import determine_language
 from ..ir import (
     Document,
@@ -69,6 +76,22 @@ _MAX_HEADING_LEVELS = 4
 # rounding-noise points bigger isn't a heading.
 _HEADING_SIZE_MARGIN = 1.08
 _HEADING_LOW_CONFIDENCE_CHARS = 120  # unusually long for a real heading
+
+# Per-heading confidence (R19): a blend of how far the heading's font
+# size stands out from the body-text cluster, how well-represented that
+# size tier is across the sampled document (a one-off tier is more
+# likely a misclassified pull-quote than a real heading style), and
+# whether the text length is heading-shaped. Below the threshold, the
+# heading gets its own needs-human-review flag naming it specifically;
+# at or above it, the heading is only counted in the document-level
+# HEADINGS_INFERRED summary.
+_HEADING_LOW_CONFIDENCE_THRESHOLD = 0.5
+# Size-gap score reaches 1.0 once the heading's size exceeds the body
+# size by this much beyond the minimum heading-candidate margin.
+_HEADING_SIZE_GAP_FULL_CONFIDENCE_DELTA = 0.5
+# Tier-rarity score reaches 1.0 once this size tier accounts for at
+# least this many sampled characters somewhere in the document.
+_HEADING_TIER_RARITY_FULL_CONFIDENCE_CHARS = 20
 
 _TINY_IMAGE_PX = 24
 _REPEATED_IMAGE_PAGE_FRACTION = 0.5
@@ -131,28 +154,31 @@ def extract_pdf(path: str | Path, progress_callback: ProgressCallback | None = N
 
     doc_flags: list[Flag] = []
 
-    body_size, size_to_level = _infer_heading_sizes(pdf)
+    body_size, size_to_level, size_char_counts = _infer_heading_sizes(pdf)
 
     image_page_counts = _prescan_image_page_counts(pdf)
     image_bytes_cache: dict[int, tuple[bytes, str | None]] = {}
 
     blocks: list = []
     lang_text_parts: list[str] = []
+    high_confidence_headings: list[float] = []
 
     for page_num in range(page_count):
         page = pdf[page_num]
-        page_items, page_flags = _process_page(
+        page_items, page_flags, page_high_confidence = _process_page(
             pdf,
             page,
             page_num,
             page_count,
             body_size,
             size_to_level,
+            size_char_counts,
             image_page_counts,
             image_bytes_cache,
         )
         blocks.extend(page_items)
         doc_flags.extend(page_flags)
+        high_confidence_headings.extend(page_high_confidence)
         for item in page_items:
             text = _block_plain_text(item)
             if text:
@@ -165,6 +191,14 @@ def extract_pdf(path: str | Path, progress_callback: ProgressCallback | None = N
     pdf.close()
 
     if any(isinstance(b, Heading) for b in blocks):
+        if high_confidence_headings:
+            range_msg = (
+                f" of the {len(high_confidence_headings)} not individually "
+                f"flagged, confidence ranged {min(high_confidence_headings):.2f}"
+                f"-{max(high_confidence_headings):.2f}."
+            )
+        else:
+            range_msg = " -- every inferred heading was low-confidence and individually flagged above."
         doc_flags.append(
             Flag(
                 code="HEADINGS_INFERRED",
@@ -172,7 +206,8 @@ def extract_pdf(path: str | Path, progress_callback: ProgressCallback | None = N
                 message=(
                     "This PDF has no semantic heading tags; heading levels "
                     "were inferred from font size/weight clustering. Review "
-                    "the inferred heading structure for correctness."
+                    "the inferred heading structure for correctness"
+                    f"{range_msg}"
                 ),
             )
         )
@@ -244,13 +279,19 @@ def _reject_if_scanned(pdf: fitz.Document, path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _infer_heading_sizes(pdf: fitz.Document) -> tuple[float, dict[float, int]]:
+def _infer_heading_sizes(pdf: fitz.Document) -> tuple[float, dict[float, int], Counter]:
     """Cluster (rounded) font sizes across a sample of pages by total
     character count. The dominant cluster is the body-text baseline;
     clusters meaningfully larger than that, in descending size order, map
     to heading levels 1..N (capped). Conservative by construction: a
     size that doesn't clearly stand out from body text is never promoted
-    to a heading."""
+    to a heading.
+
+    The raw `size_char_counts` is also returned for per-heading
+    confidence scoring (R19): a size tier backed by only a handful of
+    sampled characters anywhere in the document is a weaker signal --
+    more likely a one-off pull-quote/emphasis than a real, repeated
+    heading style -- than a tier that recurs substantially."""
     size_char_counts: Counter[float] = Counter()
     for idx in _sample_page_indices(pdf.page_count, _HEADING_SAMPLE_PAGES):
         page = pdf[idx]
@@ -267,7 +308,7 @@ def _infer_heading_sizes(pdf: fitz.Document) -> tuple[float, dict[float, int]]:
         del page_dict
 
     if not size_char_counts:
-        return 12.0, {}
+        return 12.0, {}, Counter()
 
     body_size = size_char_counts.most_common(1)[0][0]
     candidate_sizes = sorted(
@@ -275,7 +316,7 @@ def _infer_heading_sizes(pdf: fitz.Document) -> tuple[float, dict[float, int]]:
         reverse=True,
     )
     size_to_level = {size: level for level, size in enumerate(candidate_sizes[:_MAX_HEADING_LEVELS], start=1)}
-    return body_size, size_to_level
+    return body_size, size_to_level, size_char_counts
 
 
 def _round_size(size: float) -> float:
@@ -314,10 +355,12 @@ def _process_page(
     page_count: int,
     body_size: float,
     size_to_level: dict[float, int],
+    size_char_counts: Counter,
     image_page_counts: Counter,
     image_bytes_cache: dict[int, tuple[bytes, str | None]],
-) -> tuple[list, list[Flag]]:
+) -> tuple[list, list[Flag], list[float]]:
     page_flags: list[Flag] = []
+    high_confidence_headings: list[float] = []
     page_dict = page.get_text("dict")
     tables_result = page.find_tables()
     tables = list(tables_result.tables)
@@ -329,18 +372,15 @@ def _process_page(
     ]
 
     table_rects = [fitz.Rect(t.bbox) for t in tables]
-    text_blocks = [
-        b
-        for b in page_dict["blocks"]
-        if b["type"] == 0 and not _overlaps_any(fitz.Rect(b["bbox"]), table_rects)
-    ]
+    raw_text_blocks = [b for b in page_dict["blocks"] if b["type"] == 0]
+    text_blocks, table_inside_blocks = _partition_table_blocks(raw_text_blocks, table_rects)
     del page_dict
 
     items: list[dict] = []
     for block in text_blocks:
         items.append({"kind": "text", "bbox": block["bbox"], "data": block})
-    for table in tables:
-        items.append({"kind": "table", "bbox": table.bbox, "data": table})
+    for table, inside_blocks in zip(tables, table_inside_blocks):
+        items.append({"kind": "table", "bbox": table.bbox, "data": table, "inside_blocks": inside_blocks})
 
     placed_images = _placed_images_on_page(page, image_page_counts)
     for img in placed_images:
@@ -353,11 +393,12 @@ def _process_page(
                 code="READING_ORDER_UNCERTAIN",
                 wcag_sc="1.3.2",
                 message=(
-                    f"Page {page_num + 1} has a layout more complex than a "
-                    "single or two-column grid (3+ distinct horizontal "
-                    "text positions detected); content was emitted in "
-                    "top-to-bottom order without column reconstruction. "
-                    "Verify reading order manually."
+                    f"Page {page_num + 1} has a layout this heuristic isn't "
+                    "confident about (either 3+ distinct horizontal text "
+                    "positions, or an ambiguous 2-way split that didn't "
+                    "look like a genuine page-wide two-column layout); "
+                    "content was emitted in top-to-bottom order without "
+                    "column reconstruction. Verify reading order manually."
                 ),
                 location=f"page {page_num + 1}",
             )
@@ -366,11 +407,13 @@ def _process_page(
     built_items: list = []
     for item in ordered_items:
         if item["kind"] == "text":
-            built_items.extend(
-                _build_text_item(item["data"], body_size, size_to_level, link_pool, page_num)
-            )
+            new_items = _build_text_item(item["data"], body_size, size_to_level, size_char_counts, link_pool, page_num)
+            for new_item in new_items:
+                if isinstance(new_item, Heading) and not any(f.code == "HEADING_LOW_CONFIDENCE" for f in new_item.flags):
+                    high_confidence_headings.append(new_item._confidence)
+            built_items.extend(new_items)
         elif item["kind"] == "table":
-            built_items.append(_build_table(item["data"], page_num, page_flags))
+            built_items.append(_build_table(item["data"], item["inside_blocks"], page_num))
         else:
             image = _build_image(
                 pdf,
@@ -401,17 +444,49 @@ def _process_page(
             )
 
     final_items = _group_lists(built_items)
-    return final_items, page_flags
+    return final_items, page_flags, high_confidence_headings
 
 
-def _overlaps_any(rect: fitz.Rect, others: list[fitz.Rect]) -> bool:
+# A block only counts as genuinely "part of" a detected table if
+# (near-)all of its own area falls inside the table's bbox. Anything
+# less -- a block that straddles the border, like a caption sitting a
+# couple points below the last row -- is left in the normal text flow
+# rather than silently swallowed, even though find_tables()'s own cell
+# extraction may (wrongly) have pulled some of that text into a cell;
+# see _cells_reconcile_with_inside_blocks for the corresponding check on
+# the extracted cell content itself.
+_TABLE_INSIDE_OVERLAP_RATIO = 0.95
+
+
+def _partition_table_blocks(
+    blocks: list[dict], table_rects: list[fitz.Rect]
+) -> tuple[list[dict], list[list[dict]]]:
+    """Split raw text blocks into (a) those that stay in the normal text
+    flow and (b) per-table lists of blocks that are genuinely inside
+    each table's bbox, for the cell-content reconciliation check."""
+    text_blocks: list[dict] = []
+    inside_blocks: list[list[dict]] = [[] for _ in table_rects]
+    for block in blocks:
+        rect = fitz.Rect(block["bbox"])
+        consumed = False
+        for idx, table_rect in enumerate(table_rects):
+            if _overlap_ratio(rect, table_rect) >= _TABLE_INSIDE_OVERLAP_RATIO:
+                inside_blocks[idx].append(block)
+                consumed = True
+                break
+        if not consumed:
+            text_blocks.append(block)
+    return text_blocks, inside_blocks
+
+
+def _overlap_ratio(rect: fitz.Rect, other: fitz.Rect) -> float:
+    """Fraction of `rect`'s own area that falls inside `other`."""
     if rect.get_area() <= 0:
-        return False
-    for other in others:
-        inter = rect & other
-        if not inter.is_empty and inter.get_area() >= 0.6 * rect.get_area():
-            return True
-    return False
+        return 0.0
+    inter = rect & other
+    if inter.is_empty:
+        return 0.0
+    return inter.get_area() / rect.get_area()
 
 
 # ---------------------------------------------------------------------------
@@ -419,13 +494,25 @@ def _overlaps_any(rect: fitz.Rect, others: list[fitz.Rect]) -> bool:
 # ---------------------------------------------------------------------------
 
 
+_TWO_COLUMN_MIN_Y_COVERAGE = 0.6  # each column must span this much of the
+# page's text-bearing vertical extent -- a short, centered pull-quote
+# that happens to be indented differently from the body only occupies a
+# small slice of that extent, so it fails this check.
+_TWO_COLUMN_MIN_ITEM_SHARE = 0.3  # and hold a real share of the page's
+# items, not just one or two odd elements.
+
+
 def _order_items(items: list[dict], page_width: float) -> tuple[list[dict], bool]:
     """Single-column baseline: sort by (y, x). Basic two-column
     detection: a clear bimodal x-clustering of block left-edges with a
-    real gutter between them -- order left column top-to-bottom, then
-    right column. Anything with 3+ distinct horizontal clusters is
-    outside this heuristic's confidence: fall back to plain y-order and
-    flag it (R20) rather than guess at a 3+ column layout."""
+    real gutter between them, where both clusters look like genuine
+    page-wide columns (see `_looks_like_genuine_two_column`) -- order
+    left column top-to-bottom, then right column. Anything with 3+
+    distinct horizontal clusters, or a 2-cluster split that doesn't look
+    like a real two-column layout (e.g. a centered pull-quote indented
+    differently from the surrounding body text), is outside this
+    heuristic's confidence: fall back to plain y-order and flag it (R20)
+    rather than guess at the layout."""
     if len(items) < 4:
         return sorted(items, key=lambda i: (i["bbox"][1], i["bbox"][0])), False
 
@@ -443,12 +530,45 @@ def _order_items(items: list[dict], page_width: float) -> tuple[list[dict], bool
         right_min = clusters[1][0]
         if right_min - left_max >= page_width * 0.03:
             split_x = (left_max + right_min) / 2
-            left = sorted((i for i in items if i["bbox"][0] < split_x), key=lambda i: i["bbox"][1])
-            right = sorted((i for i in items if i["bbox"][0] >= split_x), key=lambda i: i["bbox"][1])
-            return left + right, False
+            left = [i for i in items if i["bbox"][0] < split_x]
+            right = [i for i in items if i["bbox"][0] >= split_x]
+            if _looks_like_genuine_two_column(items, left, right):
+                left_sorted = sorted(left, key=lambda i: i["bbox"][1])
+                right_sorted = sorted(right, key=lambda i: i["bbox"][1])
+                return left_sorted + right_sorted, False
+            # Bimodal x-split exists but doesn't look like a real
+            # page-wide two-column layout -- e.g. a pull-quote indented
+            # away from the body. Emitting it as "column 2" would move
+            # it out of its actual reading position, so fall back to
+            # plain y-order; the x-distribution was genuinely bimodal so
+            # this is flagged uncertain rather than treated as a clean
+            # single column.
+            return sorted(items, key=lambda i: (i["bbox"][1], i["bbox"][0])), True
 
     uncertain = len(clusters) >= 3
     return sorted(items, key=lambda i: (i["bbox"][1], i["bbox"][0])), uncertain
+
+
+def _looks_like_genuine_two_column(items: list[dict], left: list[dict], right: list[dict]) -> bool:
+    """A real two-column layout has both columns running the (near)
+    full vertical extent of the page's text-bearing content, each
+    holding a real share of the page's items -- not one dominant body
+    column plus a single odd, differently-indented element like a
+    pull-quote or a marginal callout."""
+    total_top = min(i["bbox"][1] for i in items)
+    total_bottom = max(i["bbox"][3] for i in items)
+    total_extent = total_bottom - total_top
+    if total_extent <= 0:
+        return False
+    for cluster in (left, right):
+        if len(cluster) / len(items) < _TWO_COLUMN_MIN_ITEM_SHARE:
+            return False
+        cluster_top = min(i["bbox"][1] for i in cluster)
+        cluster_bottom = max(i["bbox"][3] for i in cluster)
+        coverage = (cluster_bottom - cluster_top) / total_extent
+        if coverage < _TWO_COLUMN_MIN_Y_COVERAGE:
+            return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -468,6 +588,7 @@ def _build_text_item(
     block: dict,
     body_size: float,
     size_to_level: dict[float, int],
+    size_char_counts: Counter,
     link_pool: list[dict],
     page_num: int,
 ) -> list:
@@ -497,7 +618,8 @@ def _build_text_item(
         if not runs or not "".join(r.text for r in runs).strip():
             return []
         if level:
-            return [_make_heading(level, runs, page_num)]
+            heading_text = "".join(r.text for r in runs)
+            return [_make_heading(level, runs, page_num, rep_size, body_size, size_char_counts, heading_text)]
         return [Paragraph(runs=runs)]
 
     # Mixed/list content: split into groups starting at each
@@ -532,18 +654,52 @@ def _build_text_item(
     return result
 
 
-def _make_heading(level: int, runs: list[TextRun], page_num: int) -> Heading:
+def _heading_confidence(rep_size: float, body_size: float, size_char_counts: Counter, text: str) -> float:
+    """Blend size gap vs. body cluster, tier rarity, and length sanity
+    into a single 0..1 confidence score (see R19 in
+    docs/WCAG-CHECKLIST.md)."""
+    if body_size > 0:
+        gap = (rep_size / body_size) - _HEADING_SIZE_MARGIN
+        size_gap_score = max(0.0, min(1.0, gap / _HEADING_SIZE_GAP_FULL_CONFIDENCE_DELTA))
+    else:
+        size_gap_score = 1.0
+
+    tier_chars = size_char_counts.get(rep_size, 0)
+    rarity_score = max(0.0, min(1.0, tier_chars / _HEADING_TIER_RARITY_FULL_CONFIDENCE_CHARS))
+
+    text_len = len(text)
+    if text_len <= _HEADING_LOW_CONFIDENCE_CHARS:
+        length_score = 1.0
+    else:
+        overshoot = text_len - _HEADING_LOW_CONFIDENCE_CHARS
+        length_score = max(0.0, 1.0 - overshoot / _HEADING_LOW_CONFIDENCE_CHARS)
+
+    return (size_gap_score + rarity_score + length_score) / 3
+
+
+def _make_heading(
+    level: int,
+    runs: list[TextRun],
+    page_num: int,
+    rep_size: float,
+    body_size: float,
+    size_char_counts: Counter,
+    text: str,
+) -> Heading:
     heading = Heading(level=level, runs=runs)
-    if len(heading.text) > _HEADING_LOW_CONFIDENCE_CHARS:
+    confidence = _heading_confidence(rep_size, body_size, size_char_counts, text)
+    heading._confidence = confidence  # noqa: SLF001 -- internal signal for _process_page's summary stats, not part of the IR contract
+    if confidence < _HEADING_LOW_CONFIDENCE_THRESHOLD:
         heading.flags.append(
             Flag(
                 code="HEADING_LOW_CONFIDENCE",
                 wcag_sc="2.4.6",
                 message=(
-                    f"Text on page {page_num + 1} was classified as a "
-                    f"level-{level} heading based on font size, but is "
-                    "unusually long for a heading (could be a "
-                    "misclassified pull-quote or emphasized paragraph). "
+                    f"Text on page {page_num + 1} ('{text[:60]}"
+                    f"{'...' if len(text) > 60 else ''}') was classified "
+                    f"as a level-{level} heading based on font size, but "
+                    f"scored low confidence ({confidence:.2f}) -- could be "
+                    "a misclassified pull-quote or emphasized paragraph. "
                     "Verify this is really a heading."
                 ),
                 location=f"page {page_num + 1}",
@@ -692,7 +848,7 @@ def _strip_list_prefix(runs: list[TextRun]) -> list[TextRun]:
 # ---------------------------------------------------------------------------
 
 
-def _build_table(table: "fitz.table.Table", page_num: int, page_flags: list[Flag]) -> Table:
+def _build_table(table: "fitz.table.Table", inside_blocks: list[dict], page_num: int) -> Table:
     data = table.extract()
     rows: list[TableRow] = []
     col_count = len(data[0]) if data else 0
@@ -734,7 +890,46 @@ def _build_table(table: "fitz.table.Table", page_num: int, page_flags: list[Flag
                 location=f"page {page_num + 1}",
             )
         )
+    if not _cells_reconcile_with_inside_blocks(data, inside_blocks):
+        ir_table.flags.append(
+            Flag(
+                code="TABLE_EXTRACTION_UNCERTAIN",
+                wcag_sc="1.3.1",
+                message=(
+                    f"Table on page {page_num + 1}'s extracted cell "
+                    "content includes text that doesn't reconcile with "
+                    "what's actually inside the detected table borders "
+                    "(likely nearby text -- e.g. a tight caption -- that "
+                    "bled into a cell during extraction). Verify the "
+                    "table's cell contents against the source page before "
+                    "publishing."
+                ),
+                location=f"page {page_num + 1}",
+            )
+        )
     return ir_table
+
+
+def _cells_reconcile_with_inside_blocks(data: list[list[str | None]], inside_blocks: list[dict]) -> bool:
+    """True if every non-whitespace character `table.extract()` put into
+    a cell is accounted for by text genuinely inside the table's bbox.
+    Extra characters mean nearby text outside the table (e.g. a caption
+    a couple points below the border) leaked into a cell during
+    PyMuPDF's own extraction -- a sign the cell content can't be
+    trusted blindly."""
+    inside_chars: Counter[str] = Counter()
+    for block in inside_blocks:
+        for line in block["lines"]:
+            for span in line["spans"]:
+                inside_chars.update("".join(span["text"].split()))
+
+    extract_chars: Counter[str] = Counter()
+    for row in data:
+        for cell in row:
+            if cell:
+                extract_chars.update("".join(cell.split()))
+
+    return not (extract_chars - inside_chars)
 
 
 # ---------------------------------------------------------------------------
