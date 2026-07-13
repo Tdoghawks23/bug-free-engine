@@ -47,6 +47,7 @@ _CODE_INFO: dict[str, tuple[str, str]] = {
     "TABLE_EXTRACTION_UNCERTAIN": ("R18", "needs-human-review"),
     "OCR_APPLIED": ("R22", "needs-human-review"),
     "SCAN_IMAGES_EXCLUDED": ("R22", "info"),
+    "OCR_NO_TEXT_RECOVERED": ("R22", "needs-human-review"),
 }
 _DEFAULT_R_NUMBER = "R2"
 

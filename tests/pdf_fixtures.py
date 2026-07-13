@@ -335,6 +335,136 @@ def build_scanned_text_pdf(
     return path
 
 
+def build_mixed_scanned_pdf(
+    path: str | Path,
+    real_page_count: int = 5,
+    scan_text: str = "This is a scanned signature page about accessibility",
+) -> Path:
+    """`real_page_count` born-digital text pages followed by one
+    scanned/image-only page -- the QA blocker-1 regression fixture: a
+    document-wide average must not hide a single scanned page mixed
+    into an otherwise normal document. Covers both the 1+1 and 5+1
+    cases the reviewer reproduced (pass `real_page_count=1` for the
+    former)."""
+    path = Path(path)
+    text_doc = fitz.open()
+    text_page = text_doc.new_page()
+    rect = fitz.Rect(72, 250, text_page.rect.width - 72, 500)
+    text_page.insert_textbox(rect, scan_text, fontsize=30, fontname="helv", align=1)
+    page_png = text_page.get_pixmap(dpi=150).tobytes("png")
+    text_doc.close()
+
+    doc = fitz.open()
+    for i in range(real_page_count):
+        page = doc.new_page()
+        page.insert_text((72, 72), f"Real Page {i + 1} Heading", fontsize=_H1_SIZE, fontname="helv")
+        page.insert_text(
+            (72, 120),
+            f"Body paragraph content for real page {i + 1} of ordinary prose text.",
+            fontsize=_BODY_SIZE,
+            fontname="helv",
+        )
+    scan_page = doc.new_page()
+    scan_page.insert_image(scan_page.rect, stream=page_png)
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
+def build_noise_scan_pdf(path: str | Path, page_count: int = 1) -> Path:
+    """A page whose image is random pixel noise (no legible text at
+    all) -- the zero-yield-OCR regression fixture (QA blocker-2):
+    should OCR to (near-)empty text, distinct from a page with genuine,
+    if fuzzy, transcribable content."""
+    import random
+
+    path = Path(path)
+    rng = random.Random(0)
+    img = PILImage.new("RGB", (200, 260))
+    pixels = img.load()
+    for x in range(img.width):
+        for y in range(img.height):
+            pixels[x, y] = (rng.randrange(256), rng.randrange(256), rng.randrange(256))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    page_png = buf.getvalue()
+
+    doc = fitz.open()
+    for _ in range(page_count):
+        page = doc.new_page()
+        page.insert_image(page.rect, stream=page_png)
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
+def build_rotated_scanned_text_pdf(
+    path: str | Path,
+    text: str = "This is a scanned document about accessibility remediation",
+    rotation: int = 90,
+) -> Path:
+    """Same shape as `build_scanned_text_pdf`, but the rasterized page
+    image is rotated before being embedded -- the QA blocker-4
+    regression fixture for ocrmypdf's `rotate_pages` orientation
+    correction (Tesseract OSD)."""
+    path = Path(path)
+    text_doc = fitz.open()
+    text_page = text_doc.new_page()
+    rect = fitz.Rect(72, 250, text_page.rect.width - 72, 500)
+    text_page.insert_textbox(rect, text, fontsize=30, fontname="helv", align=1)
+    page_png = text_page.get_pixmap(dpi=150).tobytes("png")
+    text_doc.close()
+
+    img = PILImage.open(io.BytesIO(page_png))
+    rotated = img.rotate(-rotation, expand=True)
+    buf = io.BytesIO()
+    rotated.save(buf, format="PNG")
+    rotated_png = buf.getvalue()
+
+    doc = fitz.open()
+    page = doc.new_page()
+    # `keep_proportion=False` (the rotated image's aspect ratio no
+    # longer matches the page's) so the placed image still fills (near)
+    # the whole page area -- otherwise PyMuPDF letterboxes it and the
+    # scan-detection heuristic's "big image" check never fires.
+    page.insert_image(page.rect, stream=rotated_png, keep_proportion=False)
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
+def build_mixed_scanned_with_born_digital_full_page_image_pdf(path: str | Path) -> Path:
+    """A born-digital page with its own genuine full-page image (real
+    content, not a scan artifact) followed by a scanned/image-only
+    page -- regression fixture for scoping `SCAN_IMAGES_EXCLUDED`
+    suppression to only the pages actually classified as scanned: the
+    born-digital page's full-page image must still come through as a
+    normal (MISSING_ALT) content image."""
+    path = Path(path)
+    text_doc = fitz.open()
+    text_page = text_doc.new_page()
+    rect = fitz.Rect(72, 250, text_page.rect.width - 72, 500)
+    text_page.insert_textbox(rect, "This is a scanned page about accessibility", fontsize=30, fontname="helv", align=1)
+    page_png = text_page.get_pixmap(dpi=150).tobytes("png")
+    text_doc.close()
+
+    doc = fitz.open()
+    born_digital = doc.new_page()
+    born_digital.insert_text((72, 72), "Real Page Heading", fontsize=_H1_SIZE, fontname="helv")
+    born_digital.insert_text(
+        (72, 120), "Plenty of ordinary body prose sits on this born-digital page.", fontsize=_BODY_SIZE, fontname="helv"
+    )
+    full_page_png = _tiny_png_bytes((400, 500), color=(60, 120, 40))
+    born_digital.insert_image(born_digital.rect, stream=full_page_png)
+
+    scan_page = doc.new_page()
+    scan_page.insert_image(scan_page.rect, stream=page_png)
+
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
 def build_encrypted_pdf(path: str | Path) -> Path:
     """A password-protected PDF -- the encrypted-PDF rejection
     fixture."""
