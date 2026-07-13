@@ -40,10 +40,13 @@ Debian/Ubuntu if missing -- check first with `ldconfig -p | grep pango`).
 # Feasibility spike (task 2) -- writes spike/output.pdf, prints structure evidence
 python spike/pdfua_spike.py
 
-# CLI pipeline entry point (added in later tasks)
+# CLI pipeline entry point
 python -m remediate <file>
 
-# Web app (added in later tasks)
+# Web app -- upload a .pdf/.docx, poll progress, download tagged PDF +
+# HTML + compliance report. `remediate.app:app` is the FastAPI app
+# (src/remediate/app.py); jobs run one at a time on a single background
+# worker and write to jobs/<uuid>/ (gitignored) under the repo root.
 uvicorn remediate.app:app --reload
 ```
 

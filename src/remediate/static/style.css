@@ -1,0 +1,176 @@
+/* Minimal, AA-contrast-checked styling. Body text #1a1a1a on #ffffff
+   (contrast ~19:1); links/buttons #0b4f8a on white (~7.5:1). */
+
+:root {
+  color-scheme: light;
+  --text: #1a1a1a;
+  --bg: #ffffff;
+  --accent: #0b4f8a;
+  --accent-dark: #073a66;
+  --border: #6b6b6b;
+  --error: #a3120a;
+  --success: #146c2e;
+  --warn: #8a4b00;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.skip-link {
+  position: absolute;
+  left: -999px;
+  top: 0;
+  background: var(--accent-dark);
+  color: #fff;
+  padding: 0.5rem 1rem;
+  z-index: 10;
+}
+
+.skip-link:focus {
+  left: 0.5rem;
+  top: 0.5rem;
+}
+
+header,
+main {
+  max-width: 42rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem;
+}
+
+header {
+  border-bottom: 1px solid var(--border);
+}
+
+h1 {
+  font-size: 1.6rem;
+  margin: 0 0 0.5rem;
+}
+
+h2 {
+  font-size: 1.2rem;
+}
+
+section {
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid #ddd;
+}
+
+.field {
+  margin-bottom: 1rem;
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+input[type="file"] {
+  display: block;
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+button {
+  font-size: 1rem;
+  padding: 0.6rem 1.2rem;
+  background: var(--accent);
+  color: #fff;
+  border: 1px solid var(--accent-dark);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--accent-dark);
+}
+
+button:disabled {
+  background: #999;
+  border-color: #777;
+  cursor: not-allowed;
+}
+
+a {
+  color: var(--accent);
+}
+
+a:hover,
+a:focus {
+  color: var(--accent-dark);
+}
+
+:focus-visible {
+  outline: 3px solid var(--accent-dark);
+  outline-offset: 2px;
+}
+
+.error-text {
+  color: var(--error);
+  font-weight: 600;
+  min-height: 1.2em;
+}
+
+#error-message {
+  color: var(--error);
+  font-weight: 600;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 1.25rem;
+  background: #e6e6e6;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.review-count {
+  font-weight: 700;
+  color: var(--warn);
+}
+
+.downloads {
+  list-style: none;
+  padding: 0;
+}
+
+.downloads li {
+  margin-bottom: 0.5rem;
+}
+
+.downloads a {
+  display: inline-block;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  text-decoration: none;
+}
+
+.downloads a:hover,
+.downloads a:focus {
+  background: var(--accent);
+  color: #fff;
+}
