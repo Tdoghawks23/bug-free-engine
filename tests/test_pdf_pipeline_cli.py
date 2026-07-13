@@ -56,18 +56,26 @@ def test_cli_end_to_end_run_on_pdf(fixture_pdf, tmp_path):
     assert (outdir / "report.html").exists()
 
 
-def test_cli_rejects_scanned_pdf_with_clean_message(tmp_path):
+def test_cli_rejects_scanned_pdf_when_ocr_tooling_missing(tmp_path):
+    # Scanned PDFs are OCR'd automatically when tesseract/ghostscript are
+    # on PATH (see test_ocr.py); strip PATH down to nothing to exercise
+    # the tooling-missing fallback rejection through the real CLI/subprocess
+    # boundary (can't monkeypatch across a subprocess).
+    import os
+
     from pdf_fixtures import build_scanned_pdf
 
     scanned = build_scanned_pdf(tmp_path / "scan.pdf")
     outdir = tmp_path / "out"
+    env = dict(os.environ, PATH="/nonexistent")
     proc = subprocess.run(
         [sys.executable, "-m", "remediate", str(scanned), "-o", str(outdir)],
         capture_output=True,
         text=True,
+        env=env,
     )
     assert proc.returncode != 0
-    assert "scanned" in proc.stderr.lower()
+    assert "ocr tooling" in proc.stderr.lower()
 
 
 def test_output_pdf_has_struct_tree_root_and_lang(fixture_pdf, tmp_path):

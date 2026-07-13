@@ -34,6 +34,12 @@ WeasyPrint needs system pango/cairo/gdk-pixbuf (`apt-get install
 libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libgdk-pixbuf2.0-0` on
 Debian/Ubuntu if missing -- check first with `ldconfig -p | grep pango`).
 
+OCR of scanned PDFs needs system tesseract + ghostscript (`apt-get
+install tesseract-ocr tesseract-ocr-eng ghostscript` on Debian/Ubuntu if
+missing -- check first with `which tesseract gs`). Without these, the
+`ocrmypdf` pip package is installed but scanned PDFs fall back to the
+pre-OCR rejection behavior instead of crashing.
+
 ## Run
 
 ```bash

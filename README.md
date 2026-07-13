@@ -14,9 +14,11 @@ part of every run, not a failure state.**
 - **Output is a rebuild, not a repair.** The tagged PDF uses a clean,
   contrast-compliant default stylesheet — it does not preserve the
   source document's fonts, colors, or branding.
-- **Scanned or image-only PDFs are rejected**, not processed. There's no
-  OCR step; a PDF with negligible extractable text fails with a clear
-  error instead of producing an empty or garbled result.
+- **Scanned or image-only PDFs are OCR'd automatically** (English) and
+  the result is flagged for a human to verify transcription accuracy
+  before publishing — OCR is inherently imperfect and the pipeline can't
+  check its own output. Only rejected (with a clear error) if the
+  server's OCR tooling isn't installed.
 - **Encrypted/password-protected PDFs are rejected** with a clear error.
   Remove the password first.
 - **Complex tables and multi-column layouts are flagged, not fixed.**
@@ -53,6 +55,17 @@ first with `ldconfig -p | grep pango`, then if missing:
 apt-get install libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libgdk-pixbuf2.0-0
 ```
 
+OCR of scanned PDFs needs system tesseract and ghostscript. Check first
+with `which tesseract gs`, then if missing:
+
+```bash
+apt-get install tesseract-ocr tesseract-ocr-eng ghostscript
+```
+
+The `ocrmypdf` Python package is installed automatically as a regular
+dependency; without the system binaries above, scanned PDFs fall back to
+a clean rejection (see Limitations) instead of failing partway through.
+
 ## Usage
 
 ### Web app
@@ -63,7 +76,8 @@ uvicorn remediate.app:app --reload
 
 Open the app in a browser, upload a `.pdf` or `.docx`, and watch the
 progress indicator (extracting → generating HTML → rendering PDF →
-building report). When the job finishes, download links appear for:
+building report; a scanned PDF gets an extra OCR step before extracting).
+When the job finishes, download links appear for:
 
 - the tagged PDF/UA-1
 - the accessible HTML
@@ -92,7 +106,8 @@ Writes four files into `OUTDIR`:
 
 Prints progress to stderr and a summary of the four output paths to
 stdout on success. Exits non-zero with an error message (no traceback)
-if the input is unsupported, encrypted, or detected as scanned/image-only.
+if the input is unsupported, encrypted, or scanned/image-only with no
+OCR tooling installed on the machine.
 
 ## Compliance workflow
 

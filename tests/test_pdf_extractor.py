@@ -236,8 +236,11 @@ def test_repeated_logo_marked_decorative(tmp_path):
     assert all(img.data == images[0].data for img in images)
 
 
-def test_scanned_pdf_rejected(tmp_path):
-    with pytest.raises(PdfExtractionError, match="scanned"):
+def test_scanned_pdf_rejected_when_ocr_tooling_missing(tmp_path, monkeypatch):
+    # Scanned PDFs are now OCR'd automatically when the tooling is
+    # present (see test_ocr.py); this is the graceful-degradation case.
+    monkeypatch.setattr("remediate.ocr.available", lambda: False)
+    with pytest.raises(PdfExtractionError, match="OCR tooling"):
         extract_pdf(build_scanned_pdf(tmp_path / "scan.pdf"))
 
 

@@ -291,10 +291,42 @@ def build_repeated_logo_pdf(path: str | Path, page_count: int = 4) -> Path:
 
 def build_scanned_pdf(path: str | Path, page_count: int = 3) -> Path:
     """Pages that are each a single full-page image with no extractable
-    text -- the scanned/image-only rejection fixture."""
+    text -- the scanned/image-only *tooling-missing fallback* fixture
+    (no real text baked into the raster, so it's not useful for
+    exercising OCR transcription itself -- see build_scanned_text_pdf)."""
     path = Path(path)
     doc = fitz.open()
     page_png = _tiny_png_bytes((50, 70), color=(220, 220, 210))
+    for _ in range(page_count):
+        page = doc.new_page()
+        page.insert_image(page.rect, stream=page_png)
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
+def build_scanned_text_pdf(
+    path: str | Path,
+    text: str = "This is a scanned document about accessibility remediation",
+    page_count: int = 1,
+) -> Path:
+    """A scanned/image-only PDF whose page image is a rasterized page of
+    real, clearly legible text (30pt+, per the OCR test plan) -- for
+    exercising the OCR-transcription path end-to-end. Built by rendering
+    text into a normal PDF page with `insert_textbox` (so it wraps within
+    the page instead of running off the edge), rasterizing that page to
+    a PNG via PyMuPDF, then wrapping the PNG as a full-page image on a
+    fresh, textless page -- the same "image-only PDF" shape as
+    `build_scanned_pdf`, just with real transcribable content."""
+    path = Path(path)
+    text_doc = fitz.open()
+    text_page = text_doc.new_page()
+    rect = fitz.Rect(72, 250, text_page.rect.width - 72, 500)
+    text_page.insert_textbox(rect, text, fontsize=30, fontname="helv", align=1)
+    page_png = text_page.get_pixmap(dpi=150).tobytes("png")
+    text_doc.close()
+
+    doc = fitz.open()
     for _ in range(page_count):
         page = doc.new_page()
         page.insert_image(page.rect, stream=page_png)

@@ -67,9 +67,15 @@ def remediate_file(
     else:
         # PDF extraction is page-by-page (task 9) and reports its own
         # sub-progress -- rescale it into the "extracting" stage's share
-        # of overall progress instead of a single 0.0 -> 1.0 jump.
-        def extraction_progress(_stage: str, page_frac: float) -> None:
-            report_progress("extracting", page_frac * 0.35)
+        # of overall progress instead of a single 0.0 -> 1.0 jump. The
+        # extractor also reports a distinct "ocr" stage before OCR'ing a
+        # scanned PDF (slow -- seconds per page); that one isn't rescaled
+        # since it's a discrete pre-step, not a fraction of "extracting".
+        def extraction_progress(stage: str, page_frac: float) -> None:
+            if stage == "ocr":
+                report_progress("ocr", page_frac)
+            else:
+                report_progress("extracting", page_frac * 0.35)
 
         document = extract_pdf(input_path, progress_callback=extraction_progress)
 

@@ -19,6 +19,8 @@ the same logo/watermark image is often reused across many pages.
 from __future__ import annotations
 
 import re
+import shutil
+import tempfile
 from collections import Counter
 from pathlib import Path
 from typing import Callable
@@ -33,6 +35,7 @@ import fitz  # PyMuPDF
 fitz.no_recommend_layout()
 
 from .common import determine_language
+from .. import ocr as _ocr
 from ..ir import (
     Document,
     Flag,
@@ -53,9 +56,9 @@ ProgressCallback = Callable[[str, float], None]
 
 class PdfExtractionError(Exception):
     """Raised when a PDF can't or won't be processed: encrypted/password
-    protected, or detected as a scanned/image-only PDF (OCR is out of
-    scope -- see the plan's "out of scope" list). The caller (pipeline/
-    CLI) is expected to turn this into a clean exit, not a traceback."""
+    protected, or detected as scanned/image-only *and* the OCR tooling
+    needed to transcribe it isn't installed. The caller (pipeline/CLI)
+    is expected to turn this into a clean exit, not a traceback."""
 
 
 # PyMuPDF span "flags" bitfield: bit 0 = superscript, bit 1 = italic,
@@ -122,9 +125,11 @@ _EXT_TO_MIME = {
 def extract_pdf(path: str | Path, progress_callback: ProgressCallback | None = None) -> Document:
     """Extract a .pdf file into the internal Document representation.
 
-    Raises PdfExtractionError for encrypted or scanned/image-only input
-    -- the caller is expected to turn that into a clean exit, not a
-    traceback.
+    A scanned/image-only PDF is OCR'd automatically (English, via
+    ocrmypdf) before extraction proceeds as normal -- see
+    `_run_ocr_if_scanned`. Raises PdfExtractionError for encrypted input,
+    or for scanned input when the OCR tooling isn't installed -- the
+    caller is expected to turn that into a clean exit, not a traceback.
     """
     path = Path(path)
 
@@ -150,45 +155,81 @@ def extract_pdf(path: str | Path, progress_callback: ProgressCallback | None = N
         pdf.close()
         raise PdfExtractionError(f"'{path.name}' has no pages.")
 
-    _reject_if_scanned(pdf, path)
+    pdf, page_count, ocr_applied, ocr_tmp_dir = _run_ocr_if_scanned(pdf, path, page_count, report)
 
-    doc_flags: list[Flag] = []
+    try:
+        doc_flags: list[Flag] = []
 
-    body_size, size_to_level, size_char_counts = _infer_heading_sizes(pdf)
+        body_size, size_to_level, size_char_counts = _infer_heading_sizes(pdf)
 
-    image_page_counts = _prescan_image_page_counts(pdf)
-    image_bytes_cache: dict[int, tuple[bytes, str | None]] = {}
+        image_page_counts = _prescan_image_page_counts(pdf)
+        image_bytes_cache: dict[int, tuple[bytes, str | None]] = {}
 
-    blocks: list = []
-    lang_text_parts: list[str] = []
-    high_confidence_headings: list[float] = []
+        blocks: list = []
+        lang_text_parts: list[str] = []
+        high_confidence_headings: list[float] = []
+        any_scan_image_excluded = False
 
-    for page_num in range(page_count):
-        page = pdf[page_num]
-        page_items, page_flags, page_high_confidence = _process_page(
-            pdf,
-            page,
-            page_num,
-            page_count,
-            body_size,
-            size_to_level,
-            size_char_counts,
-            image_page_counts,
-            image_bytes_cache,
+        for page_num in range(page_count):
+            page = pdf[page_num]
+            page_items, page_flags, page_high_confidence, scan_image_excluded = _process_page(
+                pdf,
+                page,
+                page_num,
+                page_count,
+                body_size,
+                size_to_level,
+                size_char_counts,
+                image_page_counts,
+                image_bytes_cache,
+                ocr_applied,
+            )
+            blocks.extend(page_items)
+            doc_flags.extend(page_flags)
+            high_confidence_headings.extend(page_high_confidence)
+            any_scan_image_excluded = any_scan_image_excluded or scan_image_excluded
+            for item in page_items:
+                text = _block_plain_text(item)
+                if text:
+                    lang_text_parts.append(text)
+            report("extracting", (page_num + 1) / page_count)
+
+        pdf_lang = _read_catalog_lang(pdf)
+
+        metadata_title = (pdf.metadata or {}).get("title") or ""
+    finally:
+        pdf.close()
+        if ocr_tmp_dir is not None:
+            shutil.rmtree(ocr_tmp_dir, ignore_errors=True)
+
+    if ocr_applied:
+        doc_flags.append(
+            Flag(
+                code="OCR_APPLIED",
+                wcag_sc="1.1.1",
+                message=(
+                    "This looked like a scanned/image-only PDF, so its text "
+                    "was machine-transcribed via OCR (English) rather than "
+                    "extracted from a real text layer -- verify "
+                    "transcription accuracy before publishing."
+                ),
+            )
         )
-        blocks.extend(page_items)
-        doc_flags.extend(page_flags)
-        high_confidence_headings.extend(page_high_confidence)
-        for item in page_items:
-            text = _block_plain_text(item)
-            if text:
-                lang_text_parts.append(text)
-        report("extracting", (page_num + 1) / page_count)
-
-    pdf_lang = _read_catalog_lang(pdf)
-
-    metadata_title = (pdf.metadata or {}).get("title") or ""
-    pdf.close()
+    if any_scan_image_excluded:
+        doc_flags.append(
+            Flag(
+                code="SCAN_IMAGES_EXCLUDED",
+                wcag_sc="1.1.1",
+                message=(
+                    "One or more pages' full-page scan images were "
+                    "excluded as OCR processing artifacts rather than "
+                    "emitted as content images. Any figures/photos "
+                    "embedded within those scanned pages could not be "
+                    "extracted separately -- review the source scan if "
+                    "discrete images from those pages are needed."
+                ),
+            )
+        )
 
     if any(isinstance(b, Heading) for b in blocks):
         if high_confidence_headings:
@@ -230,7 +271,7 @@ def extract_pdf(path: str | Path, progress_callback: ProgressCallback | None = N
 
 
 # ---------------------------------------------------------------------------
-# Rejection gate.
+# Scan detection + OCR gate.
 # ---------------------------------------------------------------------------
 
 
@@ -243,7 +284,11 @@ def _sample_page_indices(page_count: int, sample_size: int) -> list[int]:
     return sorted({round(i * step) for i in range(sample_size)})
 
 
-def _reject_if_scanned(pdf: fitz.Document, path: Path) -> None:
+def _looks_scanned(pdf: fitz.Document) -> bool:
+    """Sampled classification: True if sampled pages are dominated by
+    full-page images with negligible extractable text -- a scanned/
+    image-only PDF. Detection only; the caller decides whether to OCR
+    or reject based on tooling availability."""
     sample = _sample_page_indices(pdf.page_count, _SCAN_SAMPLE_PAGES)
     total_chars = 0
     pages_with_big_image = 0
@@ -264,14 +309,45 @@ def _reject_if_scanned(pdf: fitz.Document, path: Path) -> None:
                 break
 
     avg_chars = total_chars / len(sample) if sample else 0
-    if avg_chars < _SCAN_CHARS_PER_PAGE_THRESHOLD and pages_with_big_image >= max(1, len(sample) // 2):
+    return avg_chars < _SCAN_CHARS_PER_PAGE_THRESHOLD and pages_with_big_image >= max(1, len(sample) // 2)
+
+
+def _run_ocr_if_scanned(
+    pdf: fitz.Document, path: Path, page_count: int, report: Callable[[str, float], None]
+) -> tuple[fitz.Document, int, bool, str | None]:
+    """If `pdf` looks scanned, OCR it (English) and return a fresh
+    `fitz.Document` opened on the OCR'd result, plus the temp directory
+    it was written into (caller's responsibility to clean up once done
+    reading from it). Raises PdfExtractionError, same as the old
+    unconditional rejection, when OCR tooling isn't installed --
+    graceful degradation, no hard dependency on the OCR stack being
+    present at runtime."""
+    if not _looks_scanned(pdf):
+        return pdf, page_count, False, None
+
+    if not _ocr.available():
+        pdf.close()
         raise PdfExtractionError(
             f"Cannot process '{path.name}': this looks like a scanned or "
             "image-only PDF (sampled pages are dominated by full-page "
-            "images with negligible extractable text). OCR is out of "
-            "scope for this tool -- run it through an OCR step first if "
-            "you need this content remediated."
+            "images with negligible extractable text), and the OCR "
+            "tooling needed to transcribe it isn't installed. Install "
+            "the tesseract-ocr, tesseract-ocr-eng, and ghostscript system "
+            "packages (see README/CLAUDE.md) and try again."
         )
+
+    report("ocr", 0.0)
+    tmp_dir = tempfile.mkdtemp(prefix="remediate-ocr-")
+    output_path = Path(tmp_dir) / f"{path.stem}.ocr.pdf"
+    try:
+        _ocr.ocr_to_pdf(path, output_path)
+        pdf.close()
+        ocred_pdf = fitz.open(str(output_path))
+    except Exception as exc:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise PdfExtractionError(f"OCR failed for '{path.name}': {exc}") from exc
+    report("ocr", 1.0)
+    return ocred_pdf, ocred_pdf.page_count, True, tmp_dir
 
 
 # ---------------------------------------------------------------------------
@@ -358,7 +434,8 @@ def _process_page(
     size_char_counts: Counter,
     image_page_counts: Counter,
     image_bytes_cache: dict[int, tuple[bytes, str | None]],
-) -> tuple[list, list[Flag], list[float]]:
+    ocr_applied: bool = False,
+) -> tuple[list, list[Flag], list[float], bool]:
     page_flags: list[Flag] = []
     high_confidence_headings: list[float] = []
     page_dict = page.get_text("dict")
@@ -383,6 +460,21 @@ def _process_page(
         items.append({"kind": "table", "bbox": table.bbox, "data": table, "inside_blocks": inside_blocks})
 
     placed_images = _placed_images_on_page(page, image_page_counts)
+    scan_image_excluded = False
+    if ocr_applied:
+        # In an OCR'd document, a page-covering image is the scan
+        # raster itself -- a processing artifact, not content -- so it's
+        # excluded here rather than emitted as a MISSING_ALT image on
+        # every single page (task 3). A genuinely full-page image in a
+        # normal (non-OCR) PDF keeps the existing MISSING_ALT behavior.
+        page_area = page.rect.width * page.rect.height
+        kept_images = []
+        for img in placed_images:
+            if page_area > 0 and fitz.Rect(img["rect"]).get_area() >= _BIG_IMAGE_PAGE_AREA_FRACTION * page_area:
+                scan_image_excluded = True
+                continue
+            kept_images.append(img)
+        placed_images = kept_images
     for img in placed_images:
         items.append({"kind": "image", "bbox": img["rect"], "data": img})
 
@@ -444,7 +536,7 @@ def _process_page(
             )
 
     final_items = _group_lists(built_items)
-    return final_items, page_flags, high_confidence_headings
+    return final_items, page_flags, high_confidence_headings, scan_image_excluded
 
 
 # A block only counts as genuinely "part of" a detected table if

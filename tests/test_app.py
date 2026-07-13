@@ -79,7 +79,10 @@ def test_malformed_job_id_returns_404(client):
     assert resp.status_code == 404
 
 
-def test_scanned_pdf_ends_in_error_state_with_human_message(client, tmp_path):
+def test_scanned_pdf_ends_in_error_state_when_ocr_tooling_missing(client, tmp_path, monkeypatch):
+    # Scanned PDFs are OCR'd automatically when tooling is present (see
+    # test_ocr.py); this exercises the tooling-missing fallback.
+    monkeypatch.setattr("remediate.ocr.available", lambda: False)
     scanned_path = build_scanned_pdf(tmp_path / "scan.pdf")
 
     with scanned_path.open("rb") as f:
@@ -89,7 +92,7 @@ def test_scanned_pdf_ends_in_error_state_with_human_message(client, tmp_path):
 
     status = _poll_until_finished(client, job_id)
     assert status["state"] == "error"
-    assert "scanned" in status["error"].lower()
+    assert "ocr tooling" in status["error"].lower()
 
 
 def test_path_traversal_on_artifact_name_is_rejected(client, tmp_path):

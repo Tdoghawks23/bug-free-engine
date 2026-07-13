@@ -29,10 +29,16 @@
 
   // Ordered to match pipeline.py's real stage sequence; anything reported
   // that isn't in this list (there shouldn't be) just skips the tracker.
+  // "ocr" is deliberately NOT in this list: it only fires for scanned
+  // PDFs, so it isn't one of the fixed tracker steps below -- it still
+  // gets a label (used for the status text) and just leaves the tracker
+  // showing nothing active/done while it runs, which degrades cleanly
+  // for the common (non-OCR) case.
   var STAGE_ORDER = ["extracting", "generating_html", "rendering_pdf", "building_report"];
 
   var STAGE_LABELS = {
     queued: "Queued",
+    ocr: "OCR'ing scanned document",
     extracting: "Extracting document content",
     generating_html: "Generating accessible HTML",
     rendering_pdf: "Rendering tagged PDF",
@@ -168,15 +174,19 @@
     });
   }
 
-  // Best-effort extra guidance for the two documented rejection reasons
-  // (spike/FINDINGS.md + extractors/pdf.py): scanned/image-only and
-  // encrypted PDFs. Purely additive -- falls back to nothing if the
-  // backend message doesn't match either case.
+  // Best-effort extra guidance for the documented rejection reasons
+  // (spike/FINDINGS.md + extractors/pdf.py): OCR-tooling-missing on a
+  // scanned PDF, and encrypted PDFs. Scanned PDFs are OCR'd automatically
+  // now, so a "scanned" rejection only still happens when the OCR
+  // tooling itself isn't installed -- match specifically on that, not on
+  // "scanned" alone (a scanned upload that succeeds isn't an error at
+  // all). Purely additive -- falls back to nothing if the backend
+  // message doesn't match either case.
   function errorHintFor(message) {
     var lower = (message || "").toLowerCase();
-    if (lower.indexOf("scanned") !== -1 || lower.indexOf("image-only") !== -1) {
-      return "This looks like a scanned or image-only PDF with no extractable text. " +
-        "Run it through OCR first, then upload the result.";
+    if (lower.indexOf("ocr tooling") !== -1) {
+      return "This looks like a scanned PDF, but the server's OCR tooling isn't installed. " +
+        "Install tesseract-ocr, tesseract-ocr-eng, and ghostscript on the server, then try again.";
     }
     if (lower.indexOf("password") !== -1 || lower.indexOf("encrypt") !== -1) {
       return "Remove the password/encryption from the PDF, then upload it again.";
