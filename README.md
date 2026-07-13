@@ -66,6 +66,32 @@ The `ocrmypdf` Python package is installed automatically as a regular
 dependency; without the system binaries above, scanned PDFs fall back to
 a clean rejection (see Limitations) instead of failing partway through.
 
+## Run with Docker
+
+All of the system packages above (pango/cairo/gdk-pixbuf, tesseract,
+ghostscript) are baked into the image, so this is the fastest way to get
+a working environment without touching your host's package manager.
+
+```bash
+docker compose up --build
+```
+
+Open http://127.0.0.1:8000 in a browser. The port is published on
+loopback only (see `compose.yaml`), matching this app's single-user,
+no-auth scope.
+
+Uploads/outputs are stored in the `jobs` named volume so they survive
+container restarts and rebuilds. For CLI-mode remediation, the input
+file has to be visible *inside* the container -- either drop it into the
+`jobs` volume first, or bind-mount a host directory in its place:
+
+```bash
+# One-off: bind-mount a host directory instead of the named volume so a
+# local file is visible in the container.
+docker compose run --rm -v "$PWD:/app/jobs" app \
+    python -m remediate /app/jobs/input.pdf -o /app/jobs/out
+```
+
 ## Usage
 
 ### Web app

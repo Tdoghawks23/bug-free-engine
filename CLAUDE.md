@@ -61,3 +61,8 @@ uvicorn remediate.app:app --reload
 ```bash
 pytest
 ```
+
+## Docker
+
+Container packaging exists (`Dockerfile`, `compose.yaml`) -- see README's
+"Run with Docker" section for usage.
