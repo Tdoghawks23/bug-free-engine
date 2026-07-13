@@ -1,0 +1,19 @@
+services:
+  app:
+    build: .
+    ports:
+      # Loopback-only by default: this is a single-user local tool with no
+      # auth (see README/CLAUDE.md), so it shouldn't be reachable from other
+      # machines out of the box. To deliberately expose it on the LAN/host
+      # network, change this to "8000:8000" (all interfaces) or
+      # "<host-ip>:8000:8000" (one interface) -- do that only if you've
+      # thought about who else can then reach it.
+      - "127.0.0.1:8000:8000"
+    volumes:
+      # Named volume so uploads/outputs (jobs/<uuid>/) survive container
+      # restarts and rebuilds. Swap for a bind mount (e.g. "./jobs:/app/jobs")
+      # if you want the files directly visible on the host filesystem.
+      - jobs:/app/jobs
+
+volumes:
+  jobs:

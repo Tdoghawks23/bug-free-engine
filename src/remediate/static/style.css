@@ -1,0 +1,472 @@
+/* Calm, utilitarian styling for a single-user compliance tool.
+   AA contrast checked (WCAG 2.1): body text #1a1a1a on #ffffff (~19:1);
+   accent #0b4f8a on white (~7.5:1); success #146c2e on white (~6.5:1);
+   warn #8a4b00 on white (~6.5:1); error #a3120a on white (~7.4:1).
+   All four also verified against --bg-subtle (#f6f5f2, luminance close
+   to white, ratios do not meaningfully drop). */
+
+:root {
+  color-scheme: light;
+
+  /* Palette -- semantic roles only, no decorative extras. */
+  --text: #1a1a1a;
+  --text-muted: #4b4b4b;
+  --bg: #ffffff;
+  --bg-subtle: #f6f5f2;
+  --accent: #0b4f8a;
+  --accent-dark: #073a66;
+  --border: #6b6b6b;
+  --border-light: #d8d6d0;
+  --error: #a3120a;
+  --error-bg: #fdf2f1;
+  --success: #146c2e;
+  --warn: #8a4b00;
+  --warn-bg: #fbf1e2;
+
+  /* Type + spacing scale -- reused everywhere, no one-off values. */
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --space-1: 0.5rem;
+  --space-2: 1rem;
+  --space-3: 1.5rem;
+  --space-4: 2rem;
+  --space-5: 3rem;
+  --radius: 8px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-ui);
+  color: var(--text);
+  background: var(--bg-subtle);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.skip-link {
+  position: absolute;
+  left: -999px;
+  top: 0;
+  background: var(--accent-dark);
+  color: #fff;
+  padding: var(--space-1) var(--space-2);
+  z-index: 10;
+  border-radius: 0 0 4px 0;
+}
+
+.skip-link:focus {
+  left: 0;
+  top: 0;
+}
+
+header,
+main {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: var(--space-3) var(--space-2);
+}
+
+header {
+  padding-top: var(--space-4);
+  padding-bottom: var(--space-3);
+}
+
+h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0 0 var(--space-1);
+}
+
+header p {
+  color: var(--text-muted);
+  margin: 0;
+  max-width: 38rem;
+}
+
+h2 {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin: 0 0 var(--space-2);
+}
+
+/* Every top-level state (upload / progress / error / results) is a card:
+   a flat, bordered surface on the subtle page background. This is the
+   one deliberate visual move -- a document/ledger feel appropriate to a
+   compliance tool, reused consistently rather than styled once. */
+main > section {
+  background: var(--bg);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.field {
+  margin-bottom: var(--space-2);
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+.field-hint {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  margin: 0.35rem 0 0;
+}
+
+input[type="file"] {
+  display: block;
+  width: 100%;
+  padding: var(--space-2);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  color: var(--text);
+  font: inherit;
+}
+
+input[type="file"]:focus-visible {
+  border-style: solid;
+}
+
+#selected-file {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 0.5rem 0 0;
+  min-height: 1.2em;
+}
+
+button {
+  font: inherit;
+  font-weight: 600;
+  font-size: 1rem;
+  padding: 0.65rem 1.3rem;
+  background: var(--accent);
+  color: #fff;
+  border: 1px solid var(--accent-dark);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--accent-dark);
+}
+
+button:disabled {
+  background: #9a9a9a;
+  border-color: #7c7c7c;
+  cursor: not-allowed;
+}
+
+a {
+  color: var(--accent);
+}
+
+a:hover,
+a:focus {
+  color: var(--accent-dark);
+}
+
+:focus-visible {
+  outline: 3px solid var(--accent-dark);
+  outline-offset: 2px;
+}
+
+.error-text {
+  color: var(--error);
+  font-weight: 600;
+  min-height: 1.2em;
+  margin: var(--space-2) 0 0;
+}
+
+.error-text:empty {
+  margin: 0;
+}
+
+/* --- Progress state --------------------------------------------------- */
+
+#progress-filename {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  margin: 0 0 var(--space-2);
+  word-break: break-all;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 0.5rem;
+  background: #e6e6e6;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+/* Decorative step tracker: mirrors the aria-live status text below it
+   for sighted users, marked aria-hidden so screen-reader users get the
+   single polite announcement rather than duplicate stage callouts. */
+.stage-list {
+  list-style: none;
+  margin: var(--space-3) 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.stage-list li {
+  position: relative;
+  padding: 0.4rem 0 0.4rem 2.25rem;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+
+.stage-list li::before {
+  content: counter(stage);
+  counter-increment: stage;
+  position: absolute;
+  left: 0;
+  top: 0.25rem;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  border: 1px solid var(--border-light);
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+}
+
+.stage-list {
+  counter-reset: stage;
+}
+
+.stage-list li::after {
+  content: "";
+  position: absolute;
+  left: 0.75rem;
+  top: 1.75rem;
+  bottom: -0.4rem;
+  width: 1px;
+  background: var(--border-light);
+}
+
+.stage-list li:last-child::after {
+  display: none;
+}
+
+.stage-list li.is-done {
+  color: var(--text);
+}
+
+.stage-list li.is-done::before {
+  content: "\2713";
+  background: var(--success);
+  border-color: var(--success);
+  color: #fff;
+}
+
+.stage-list li.is-done::after {
+  background: var(--success);
+}
+
+.stage-list li.is-active {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.stage-list li.is-active::before {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--bg);
+}
+
+#progress-status {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+/* --- Error state -------------------------------------------------------
+   Calm guidance, not an alarm: a thin accent border and a tinted panel,
+   not a solid red block. */
+
+#error-section {
+  border-color: var(--error);
+  border-left-width: 4px;
+  background: var(--error-bg);
+}
+
+#error-heading {
+  color: var(--error);
+}
+
+#error-message {
+  color: var(--text);
+  font-weight: 500;
+  margin: 0;
+}
+
+.error-hint {
+  color: var(--text-muted);
+  margin: var(--space-2) 0 0;
+  font-size: 0.9rem;
+}
+
+/* --- Results state ------------------------------------------------------ */
+
+#results-heading {
+  margin-bottom: var(--space-2);
+}
+
+.stat-hero {
+  border: 1px solid var(--warn);
+  border-left-width: 4px;
+  background: var(--warn-bg);
+  border-radius: 6px;
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.stat-hero-label {
+  margin: 0;
+  font-weight: 700;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--warn);
+}
+
+.stat-hero-value {
+  margin: 0.15rem 0 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 2.5rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--warn);
+}
+
+.stat-hero-hint {
+  margin: 0.35rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.stat-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  padding: 0;
+}
+
+.stat-row > div {
+  flex: 1 1 8rem;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  padding: 0.65rem 0.85rem;
+}
+
+.stat-row dt {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin: 0 0 0.15rem;
+}
+
+.stat-row dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+
+.downloads {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.downloads li {
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  padding: var(--space-2);
+}
+
+.downloads li.tier-primary {
+  border-color: var(--accent);
+  background: var(--bg-subtle);
+}
+
+.download-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.download-title {
+  font-weight: 700;
+}
+
+.downloads a {
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.downloads li.tier-primary a {
+  color: var(--accent-dark);
+}
+
+.download-desc {
+  margin: 0.25rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.tier-primary .download-desc {
+  color: var(--text);
+}
+
+.downloads a:hover,
+.downloads a:focus-visible {
+  text-decoration: underline;
+}
+
+@media (max-width: 30em) {
+  .stat-hero-value {
+    font-size: 2rem;
+  }
+
+  .stat-row {
+    flex-direction: column;
+  }
+
+  .stat-row > div {
+    flex-basis: auto;
+  }
+}

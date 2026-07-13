@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADA Document Remediation</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to main content</a>
+
+<header>
+  <h1>ADA Document Remediation</h1>
+  <p>Upload a PDF or Word document to produce a WCAG&nbsp;2.1&nbsp;AA tagged PDF,
+    accessible HTML, and a compliance report.</p>
+</header>
+
+<main id="main">
+  <section aria-labelledby="upload-heading">
+    <h2 id="upload-heading">Upload a document</h2>
+    <form id="upload-form" novalidate>
+      <div class="field">
+        <label for="file-input">Document file</label>
+        <input type="file" id="file-input" name="file" accept=".pdf,.docx" required>
+        <p class="field-hint">.pdf or .docx, up to 500MB.</p>
+        <p id="selected-file" aria-live="polite"></p>
+      </div>
+      <button type="submit" id="submit-button">Upload and remediate</button>
+      <p id="upload-error" class="error-text" role="alert"></p>
+    </form>
+  </section>
+
+  <section id="progress-section" hidden aria-labelledby="progress-heading">
+    <h2 id="progress-heading">Processing</h2>
+    <p id="progress-filename"></p>
+    <div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"
+         aria-valuenow="0" aria-labelledby="progress-heading" id="progress-bar">
+      <div class="progress-bar-fill" id="progress-bar-fill"></div>
+    </div>
+    <ol class="stage-list" id="stage-list" aria-hidden="true">
+      <li data-stage="extracting">Extract document content</li>
+      <li data-stage="generating_html">Generate accessible HTML</li>
+      <li data-stage="rendering_pdf">Render tagged PDF</li>
+      <li data-stage="building_report">Build compliance report</li>
+    </ol>
+    <p id="progress-status" aria-live="polite">Queued&hellip;</p>
+  </section>
+
+  <section id="error-section" hidden aria-labelledby="error-heading">
+    <h2 id="error-heading">This document could not be processed</h2>
+    <p id="error-message" role="alert"></p>
+    <p class="error-hint" id="error-hint"></p>
+  </section>
+
+  <section id="results-section" hidden aria-labelledby="results-heading">
+    <h2 id="results-heading">Remediation complete</h2>
+
+    <div class="stat-hero">
+      <p class="stat-hero-label">Needs human review</p>
+      <p class="stat-hero-value" id="review-count">0</p>
+      <p class="stat-hero-hint">Judgment calls the pipeline couldn't make automatically &mdash;
+        see the compliance report for the full list.</p>
+    </div>
+
+    <dl class="stat-row" id="results-summary">
+      <div>
+        <dt>Auto-fixed</dt>
+        <dd id="stat-autofixed">0</dd>
+      </div>
+      <div>
+        <dt>Informational</dt>
+        <dd id="stat-info">0</dd>
+      </div>
+      <div>
+        <dt>Total items</dt>
+        <dd id="stat-total">0</dd>
+      </div>
+    </dl>
+
+    <ul class="downloads" id="downloads-list"></ul>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
