@@ -85,3 +85,26 @@ def test_report_counts_by_severity(fixture_docx):
     assert counts["auto-fixed"] >= 1
     assert counts["needs-human-review"] >= 1
     assert sum(counts.values()) == len(report.items)
+
+
+def test_report_lists_every_link_for_spot_check(fixture_docx):
+    # R13b: the report must inventory every link (text + resolved URL),
+    # not only the ones the generic-text blocklist flagged.
+    doc = extract_docx(fixture_docx)
+    html_result = generate_html(doc)
+    report = build_report(doc, html_result.autofixes)
+
+    assert report.links, "fixture contains links; inventory must not be empty"
+    hrefs = {link.href for link in report.links}
+    assert any(link.flagged for link in report.links), (
+        "the 'click here' link is flagged and must be marked in the inventory"
+    )
+
+    payload = json.loads(report.to_json())
+    assert payload["links"]
+    assert {"text", "href", "flagged"} <= set(payload["links"][0])
+
+    html = render_report_html(report)
+    assert "Link inventory" in html
+    for href in hrefs:
+        assert href in html

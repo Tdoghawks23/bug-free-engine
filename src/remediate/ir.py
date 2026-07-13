@@ -246,6 +246,15 @@ class Document:
             flags.extend(_block_flags(block))
         return flags
 
+    def all_links(self) -> list[Link]:
+        """Collect every hyperlink in document order -- run-level links
+        plus links wrapping images -- so the compliance report can list
+        each link's text and resolved URL for human spot-check (R13b)."""
+        links: list[Link] = []
+        for block in self.blocks:
+            links.extend(_block_links(block))
+        return links
+
 
 def _run_flags(runs: list[TextRun]) -> list[Flag]:
     """Flags attached to hyperlinks embedded in a run of text (e.g.
@@ -256,6 +265,29 @@ def _run_flags(runs: list[TextRun]) -> list[Flag]:
         if run.link is not None:
             flags.extend(run.link.flags)
     return flags
+
+
+def _run_links(runs: list[TextRun]) -> list[Link]:
+    return [run.link for run in runs if run.link is not None]
+
+
+def _block_links(block: Block) -> list[Link]:
+    links: list[Link] = []
+    if isinstance(block, (Heading, Paragraph)):
+        links.extend(_run_links(block.runs))
+    elif isinstance(block, ListBlock):
+        for item in block.items:
+            links.extend(_run_links(item.runs))
+            for sub in item.sub_lists:
+                links.extend(_block_links(sub))
+    elif isinstance(block, Table):
+        for row in block.rows:
+            for cell in row.cells:
+                links.extend(_run_links(cell.runs))
+    elif isinstance(block, Image):
+        if block.link is not None:
+            links.append(block.link)
+    return links
 
 
 def _block_flags(block: Block) -> list[Flag]:

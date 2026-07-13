@@ -10,7 +10,7 @@ with the same accessible stylesheet as the generated document).
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 from .html_gen import DEFAULT_CSS, AutoFix
 from .ir import Document, Flag
@@ -60,9 +60,21 @@ class ReportItem:
 
 
 @dataclass
+class LinkEntry:
+    """One hyperlink from the document, listed for human spot-check of
+    link purpose (R13b / SC 2.4.4) -- every link appears here, not just
+    the ones the generic-text blocklist flagged."""
+
+    text: str
+    href: str
+    flagged: bool  # True when the link also carries a flag (e.g. GENERIC_LINK_TEXT)
+
+
+@dataclass
 class ComplianceReport:
     document_title: str
     items: list[ReportItem]
+    links: list[LinkEntry] = field(default_factory=list)
 
     @property
     def counts(self) -> dict[str, int]:
@@ -79,6 +91,9 @@ class ComplianceReport:
                 **self.counts,
             },
             "items": [asdict(item) for item in self.items],
+            # R13b: full link inventory for human spot-check of link
+            # purpose, independent of whether any link was flagged.
+            "links": [asdict(link) for link in self.links],
         }
 
     def to_json(self, indent: int = 2) -> str:
@@ -116,7 +131,11 @@ def build_report(document: Document, autofixes: list[AutoFix]) -> ComplianceRepo
     # needs-human-review (most actionable), then info.
     order = {"auto-fixed": 0, "needs-human-review": 1, "info": 2}
     items.sort(key=lambda i: (order.get(i.severity, 3), i.r_number, i.code))
-    return ComplianceReport(document_title=document.title, items=items)
+    links = [
+        LinkEntry(text=link.text, href=link.href, flagged=bool(link.flags))
+        for link in document.all_links()
+    ]
+    return ComplianceReport(document_title=document.title, items=items, links=links)
 
 
 _SEVERITY_LABELS = {
@@ -162,7 +181,36 @@ def render_report_html(report: ComplianceReport) -> str:
         "</tr></thead>\n"
         f"<tbody>\n{rows}\n</tbody>\n"
         "</table>\n"
+        f"{_render_link_inventory(report)}"
         "</body>\n</html>\n"
+    )
+
+
+def _render_link_inventory(report: ComplianceReport) -> str:
+    """R13b: every link in the document with its text and resolved URL,
+    for a human to spot-check that each link's purpose is clear."""
+    if not report.links:
+        return ""
+    rows = "\n".join(
+        "<tr>"
+        f"<td>{_esc(link.text) or '<em>(no text)</em>'}</td>"
+        f"<td><code>{_esc(link.href)}</code></td>"
+        f"<td>{'Flagged' if link.flagged else ''}</td>"
+        "</tr>"
+        for link in report.links
+    )
+    return (
+        "<h2>Link inventory (R13b)</h2>\n"
+        "<p>Spot-check that each link's text makes its purpose clear. "
+        "Links already flagged above are marked.</p>\n"
+        "<table>\n"
+        "<thead><tr>"
+        '<th scope="col">Link text</th>'
+        '<th scope="col">URL</th>'
+        '<th scope="col">Status</th>'
+        "</tr></thead>\n"
+        f"<tbody>\n{rows}\n</tbody>\n"
+        "</table>\n"
     )
 
 
