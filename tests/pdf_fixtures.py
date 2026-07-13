@@ -555,3 +555,35 @@ def build_large_pdf(path: str | Path, page_count: int = 550) -> Path:
     doc.save(str(path))
     doc.close()
     return path
+
+
+def build_wrapped_link_pdf(path: str | Path) -> Path:
+    """A link annotation whose rect covers TWO text lines (wrapped link
+    text) -- regression fixture: every intersecting span must carry the
+    href, not just the first."""
+    path = Path(path)
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "Read the accessibility guidance", fontsize=_BODY_SIZE, fontname="helv")
+    page.insert_text((72, 88), "published by the access board", fontsize=_BODY_SIZE, fontname="helv")
+    # One annotation spanning both lines' bboxes.
+    page.insert_link({"kind": fitz.LINK_URI, "from": fitz.Rect(72, 58, 260, 94), "uri": "https://example.org/guidance"})
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
+def build_intro_numbered_list_pdf(path: str | Path) -> Path:
+    """A single text block that starts with a non-list intro line
+    followed by numbered items -- regression fixture: the list must be
+    classified ordered from its first ITEM line, not the intro line."""
+    path = Path(path)
+    doc = fitz.open()
+    page = doc.new_page()
+    y = 72
+    for line in ["Follow these steps carefully:", "1. Open the document panel", "2. Choose the tagged export", "3. Save the result"]:
+        page.insert_text((72, y), line, fontsize=_BODY_SIZE, fontname="helv")
+        y += 16
+    doc.save(str(path))
+    doc.close()
+    return path

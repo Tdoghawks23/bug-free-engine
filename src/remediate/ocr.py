@@ -114,15 +114,24 @@ def ocr_to_pdf(
         finally:
             sys.stdout, sys.stderr = orig_stdout, orig_stderr
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(_run)
-        try:
-            future.result(timeout=overall_timeout)
-        except concurrent.futures.TimeoutError as exc:
-            raise OcrTimeoutError(
-                f"OCR exceeded its overall time budget ({overall_timeout:.0f}s) "
-                "and was aborted."
-            ) from exc
+    # No `with` block: the context manager's shutdown(wait=True) would
+    # block right through the timeout we just enforced, waiting for the
+    # un-cancellable OCR thread to finish -- the caller must get the
+    # timeout error promptly. On timeout, shut down without waiting; the
+    # orphaned thread runs to harmless completion in the background (see
+    # OcrTimeoutError).
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(_run)
+    try:
+        future.result(timeout=overall_timeout)
+    except concurrent.futures.TimeoutError as exc:
+        pool.shutdown(wait=False)
+        raise OcrTimeoutError(
+            f"OCR exceeded its overall time budget ({overall_timeout:.0f}s) "
+            "and was aborted."
+        ) from exc
+    else:
+        pool.shutdown(wait=True)
 
 
 __all__ = ["available", "ocr_to_pdf", "OcrTimeoutError"]

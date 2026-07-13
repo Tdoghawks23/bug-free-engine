@@ -267,3 +267,40 @@ def test_catalog_lang_metadata_used_when_present(fixture_pdf_with_lang):
     codes = {f.code for f in doc.flags}
     assert "LANG_ASSUMED" not in codes
     assert "LANG_DETECTED" not in codes
+
+
+def test_wrapped_link_annotation_links_every_intersecting_span(tmp_path):
+    # PR #1 review: a link annotation spanning two lines must attach its
+    # href to all intersecting spans, not only the first one matched.
+    from pdf_fixtures import build_wrapped_link_pdf
+
+    doc = extract_pdf(build_wrapped_link_pdf(tmp_path / "wrapped_link.pdf"))
+    linked_texts = [
+        run.link.text
+        for block in doc.blocks
+        if hasattr(block, "runs")
+        for run in block.runs
+        if run.link is not None and run.link.href == "https://example.org/guidance"
+    ]
+    joined = " ".join(linked_texts).lower()
+    assert "accessibility guidance" in joined
+    assert "access board" in joined, (
+        "second line of the wrapped link lost its href"
+    )
+
+
+def test_numbered_list_after_intro_line_is_ordered(tmp_path):
+    # PR #1 review: ordered-vs-bulleted must be classified from the
+    # first list-item line, not a leading intro line in the same block.
+    from remediate.ir import ListBlock, Paragraph
+    from pdf_fixtures import build_intro_numbered_list_pdf
+
+    doc = extract_pdf(build_intro_numbered_list_pdf(tmp_path / "intro_list.pdf"))
+    lists = [b for b in doc.blocks if isinstance(b, ListBlock)]
+    assert lists, "numbered items were not detected as a list"
+    assert lists[0].ordered is True
+    assert len(lists[0].items) == 3
+    paragraphs = [b for b in doc.blocks if isinstance(b, Paragraph)]
+    assert any("follow these steps" in p.text.lower() for p in paragraphs), (
+        "intro line must survive as a paragraph"
+    )

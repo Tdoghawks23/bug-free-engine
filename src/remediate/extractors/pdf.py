@@ -794,7 +794,13 @@ def _build_text_item(
         if runs and "".join(r.text for r in runs).strip():
             result.append(Paragraph(runs=runs))
     if groups:
-        ordered = bool(_NUMBERED_RE.match(line_texts[0]))
+        # Classify from the first actual list-item line, not line 0 --
+        # a leading non-list intro line in the same block would
+        # otherwise always demote a numbered list to <ul>.
+        first_item_text = next(
+            text for text, starts in zip(line_texts, is_list_line) if starts
+        )
+        ordered = bool(_NUMBERED_RE.match(first_item_text))
         items = []
         for group_lines in groups:
             runs = _merge_line_runs(group_lines)
@@ -913,9 +919,11 @@ def _try_hyphen_join(prev: TextRun, nxt: TextRun) -> TextRun | None:
 
 
 def _match_link(span_rect: fitz.Rect, link_pool: list[dict]) -> str | None:
+    # A single link annotation commonly covers several spans (wrapped
+    # link text), so an already-matched link must stay matchable --
+    # `matched` only feeds the LINK_UNASSOCIATED (R21) accounting, it is
+    # not a claim of exclusivity.
     for link in link_pool:
-        if link["matched"]:
-            continue
         inter = span_rect & link["rect"]
         if inter.is_empty:
             continue

@@ -229,3 +229,28 @@ def test_rotated_scan_transcribes_correctly_via_orientation_correction(tmp_path)
     assert "accessibility" in all_text
     assert not any(f.code == "OCR_NO_TEXT_RECOVERED" for f in doc.all_flags())
 
+
+
+def test_ocr_timeout_returns_promptly_without_waiting_for_worker(tmp_path, monkeypatch):
+    # PR #1 review: the ThreadPoolExecutor context manager used to block
+    # in shutdown(wait=True) until the un-cancellable OCR worker
+    # finished, making the timeout cosmetic. The caller must get
+    # OcrTimeoutError promptly.
+    import time
+
+    import ocrmypdf
+
+    from remediate import ocr as ocr_module
+
+    def _slow_ocr(*args, **kwargs):
+        time.sleep(4)
+
+    monkeypatch.setattr(ocrmypdf, "ocr", _slow_ocr)
+
+    start = time.monotonic()
+    with pytest.raises(ocr_module.OcrTimeoutError):
+        ocr_module.ocr_to_pdf(
+            tmp_path / "in.pdf", tmp_path / "out.pdf", overall_timeout=0.2
+        )
+    elapsed = time.monotonic() - start
+    assert elapsed < 2.0, f"timeout took {elapsed:.1f}s to surface -- caller blocked on the worker"
